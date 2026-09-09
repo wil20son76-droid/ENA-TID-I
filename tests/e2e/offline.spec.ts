@@ -51,7 +51,11 @@ test.describe.serial("Escenario offline obligatorio", () => {
 
   test.beforeAll(async () => {
     // Base de datos de pruebas limpia antes de correr el escenario completo.
-    await queryDb('TRUNCATE "sync_operations", "species", "ponds"');
+    // Orden seguro por llaves foráneas: desde Fase 2, fish_transfers /
+    // stockings / fish_batches referencian species y ponds.
+    await queryDb(
+      'TRUNCATE "sync_operations", "fish_transfers", "stockings", "fish_batches", "ponds", "species"',
+    );
 
     browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium" });
     context = await browser.newContext({ viewport: { width: 390, height: 844 } });
@@ -153,11 +157,11 @@ test.describe.serial("Escenario offline obligatorio", () => {
     // intercepta específicamente el endpoint de push.
     await page.route("**/api/sync/push", (route) => route.abort("failed"));
 
-    await page.goto("/estanques", { waitUntil: "load" });
-    await page.getByLabel("Código del estanque").fill("E01");
-    await page.getByLabel("Nombre del estanque").fill("Estanque Norte");
-    await page.getByRole("button", { name: "Agregar estanque" }).click();
-    await expect(page.getByText("E01 — Estanque Norte")).toBeVisible();
+    await page.goto("/estanques/nuevo", { waitUntil: "load" });
+    await page.getByLabel("Código").fill("E01");
+    await page.getByLabel("Nombre").fill("Estanque Norte");
+    await page.getByRole("button", { name: "Guardar estanque" }).click();
+    await expect(page).toHaveURL(/\/estanques\/[0-9a-f-]+$/);
 
     await page.goto("/", { waitUntil: "load" });
     await page.getByRole("button", { name: "Sincronizar ahora" }).click();
