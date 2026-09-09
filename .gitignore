@@ -1,0 +1,58 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (nunca se versiona un .env real; .env.example sí se versiona)
+.env*
+!.env.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# testing (Playwright)
+/playwright-report/
+/test-results/
+/blob-report/
+
+# PWA - generado en build por @serwist/next a partir de src/app/sw.ts
+/public/sw.js
+/public/sw.js.map
+/public/swe-worker-*.js
+
+# base de datos local de desarrollo (contenedor efímero, no artefacto del proyecto)
+/.pgdata/
+
+# cliente Prisma generado (Prisma 7, generador "prisma-client")
+/src/generated/prisma
