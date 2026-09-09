@@ -1,0 +1,126 @@
+// Esquema Prisma — Fase 1 (base técnica y offline/sync).
+//
+// Solo se modelan las entidades mínimas necesarias para demostrar la
+// arquitectura offline-first y el motor de sincronización de extremo a
+// extremo (Species, Pond) más la pieza central de idempotencia del lado
+// servidor (SyncOperation). El resto del modelo de datos completo del
+// dominio piscícola está documentado en IMPLEMENTATION_PLAN.md §4 y se
+// implementará de forma incremental en las siguientes fases.
+
+// Prisma 7 requiere el generador "prisma-client" (ESM/CJS configurable) con
+// una ruta de salida explícita, y ya no acepta la URL de conexión dentro de
+// este archivo: eso ahora vive en "prisma.config.ts" (ver IMPLEMENTATION_PLAN.md
+// §3.3, fila `prisma`). Se usa `moduleFormat = "cjs"` para no forzar todo el
+// proyecto Next.js a ESM puro.
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum PondStatus {
+  EMPTY
+  PREPARATION
+  ACTIVE
+  HARVEST
+  CLEANING
+  MAINTENANCE
+}
+
+enum SyncOperationType {
+  CREATE
+  UPDATE
+  DELETE
+}
+
+enum SyncOperationStatus {
+  applied
+  duplicate
+  conflict
+  error
+}
+
+/// Catálogo configurable de especies (§11 del plan). No se codifican
+/// especies fijas: el usuario puede crear, modificar y desactivar.
+model Species {
+  id                   String    @id @default(uuid())
+  commonName           String
+  scientificName       String?
+  description          String?
+  targetWeightGrams    Decimal?  @db.Decimal(10, 2)
+  cultureDurationDays  Int?
+  minTemperatureC      Decimal?  @db.Decimal(4, 1)
+  maxTemperatureC      Decimal?  @db.Decimal(4, 1)
+  minPh                Decimal?  @db.Decimal(4, 2)
+  maxPh                Decimal?  @db.Decimal(4, 2)
+  minDissolvedOxygen   Decimal?  @db.Decimal(5, 2)
+  expectedFcr          Decimal?  @db.Decimal(5, 2)
+  expectedMortalityPct Decimal?  @db.Decimal(5, 2)
+  notes                String?
+  active               Boolean   @default(true)
+
+  // Campos de auditoría/sincronización — presentes en toda entidad
+  // sincronizable (IMPLEMENTATION_PLAN.md §4.1).
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  version   Int       @default(1)
+  deviceId  String
+  createdBy String?
+  updatedBy String?
+
+  @@index([active])
+  @@map("species")
+}
+
+/// Estanques (§12 del plan). Sin relación a Species todavía: esa relación
+/// productiva llega con FishBatch en la Fase 2.
+model Pond {
+  id            String     @id @default(uuid())
+  code          String     @unique
+  name          String
+  type          String?
+  lengthM       Decimal?   @db.Decimal(8, 2)
+  widthM        Decimal?   @db.Decimal(8, 2)
+  averageDepthM Decimal?   @db.Decimal(8, 2)
+  surfaceM2     Decimal?   @db.Decimal(10, 2)
+  volumeM3      Decimal?   @db.Decimal(10, 2)
+  location      String?
+  notes         String?
+  status        PondStatus @default(EMPTY)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  version   Int       @default(1)
+  deviceId  String
+  createdBy String?
+  updatedBy String?
+
+  @@index([status])
+  @@map("ponds")
+}
+
+/// Registro de operaciones de sincronización procesadas por el servidor.
+/// `operationId` es la clave de idempotencia (§6.5 del plan): reenviar la
+/// misma operación de la cola local (mismo id) nunca vuelve a aplicar su
+/// efecto sobre las tablas de negocio.
+model SyncOperation {
+  id           String               @id @default(uuid())
+  operationId  String               @unique
+  entityType   String
+  entityId     String
+  operation    SyncOperationType
+  deviceId     String
+  status       SyncOperationStatus
+  errorMessage String?
+  processedAt  DateTime             @default(now())
+
+  @@index([entityType, entityId])
+  @@index([processedAt])
+  @@map("sync_operations")
+}
