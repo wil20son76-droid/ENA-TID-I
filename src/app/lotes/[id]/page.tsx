@@ -5,8 +5,17 @@ import Link from "next/link";
 import { useLiveQuery } from "dexie-react-hooks";
 
 import { db } from "@/lib/db/schema";
-import { getBatchDistribution, getBatchHistory } from "@/lib/db/repositories/ledgerQueries";
+import {
+  getBatchDistribution,
+  getBatchHistory,
+  getBatchProductionSummary,
+} from "@/lib/db/repositories/ledgerQueries";
 import { createFishTransfer } from "@/lib/db/repositories/fishTransferRepository";
+import { calculateBiomassKg } from "@/lib/domain/biomass";
+import { calculateFcr } from "@/lib/domain/fcr";
+import { calculateGrowth } from "@/lib/domain/growth";
+import { formatCount, formatG, formatKg, formatPercent } from "@/lib/domain/format";
+import { MORTALITY_CAUSE_LABEL } from "@/lib/labels";
 
 const STATUS_LABEL: Record<string, string> = {
   PLANNED: "Planeado",
@@ -222,6 +231,18 @@ export default function FishBatchDetailPage({ params }: PageProps<"/lotes/[id]">
   const history = useLiveQuery(() => getBatchHistory(id), [id]) ?? [];
   const species = useLiveQuery(() => db.species.toArray(), []) ?? [];
   const ponds = useLiveQuery(() => db.ponds.toArray(), []) ?? [];
+  const summary = useLiveQuery(
+    () => (batch ? getBatchProductionSummary(id, batch.initialAverageWeightG) : undefined),
+    [id, batch?.initialAverageWeightG],
+  );
+  const feedings = useLiveQuery(
+    () => db.feedingRecords.where("batchId").equals(id).toArray(),
+    [id],
+  ) ?? [];
+  const samplings = useLiveQuery(
+    () => db.samplings.where("batchId").equals(id).toArray(),
+    [id],
+  ) ?? [];
 
   const [showTransferForm, setShowTransferForm] = useState(false);
 
@@ -235,6 +256,41 @@ export default function FishBatchDetailPage({ params }: PageProps<"/lotes/[id]">
   const speciesName = species.find((s) => s.id === batch.speciesId)?.commonName ?? "—";
   const pondById = new Map(ponds.map((p) => [p.id, p]));
   const totalNow = Object.values(distribution).reduce((sum, q) => sum + q, 0);
+
+  const totalFeedKg = feedings
+    .filter((f) => !f.deletedAt)
+    .reduce((sum, f) => sum + f.quantityKg, 0);
+
+  // Crecimiento y FCR usan los dos muestreos más recientes del lote (en
+  // cualquiera de sus estanques): documentado en OFFLINE_SYNC.md §9 —
+  // simplificación deliberada para esta primera versión, marcada siempre
+  // como estimada (§27-§29 del encargo de Fase 3).
+  const sortedSamplings = [...samplings].sort((a, b) => a.date.localeCompare(b.date));
+  const previousSampling =
+    sortedSamplings.length >= 2 ? sortedSamplings[sortedSamplings.length - 2] : null;
+  const currentSampling = sortedSamplings.length >= 1 ? sortedSamplings[sortedSamplings.length - 1] : null;
+
+  const growth =
+    previousSampling && currentSampling && previousSampling.id !== currentSampling.id
+      ? calculateGrowth(
+          previousSampling.averageWeightG,
+          previousSampling.date,
+          currentSampling.averageWeightG,
+          currentSampling.date,
+        )
+      : null;
+
+  let fcr: ReturnType<typeof calculateFcr> = null;
+  let periodFeedKg = 0;
+  if (growth?.available && previousSampling && currentSampling) {
+    periodFeedKg = feedings
+      .filter(
+        (f) => !f.deletedAt && f.date >= previousSampling.date && f.date <= currentSampling.date,
+      )
+      .reduce((sum, f) => sum + f.quantityKg, 0);
+    const biomassGainKg = calculateBiomassKg(totalNow, growth.gainG);
+    fcr = calculateFcr(periodFeedKg, biomassGainKg);
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -256,14 +312,52 @@ export default function FishBatchDetailPage({ params }: PageProps<"/lotes/[id]">
         <span className="text-zinc-500">Siembra</span>
         <span>{formatDate(batch.initialStockingDate)}</span>
         <span className="text-zinc-500">Cantidad inicial</span>
-        <span>{batch.initialQuantity.toLocaleString("es")} peces</span>
+        <span>{formatCount(batch.initialQuantity)} peces</span>
         <span className="text-zinc-500">Peso inicial</span>
-        <span>{batch.initialAverageWeightG.toLocaleString("es")} g</span>
+        <span>{formatG(batch.initialAverageWeightG)}</span>
         <span className="text-zinc-500">Biomasa inicial</span>
-        <span>{batch.initialBiomassKg.toLocaleString("es", { maximumFractionDigits: 3 })} kg</span>
+        <span>{formatKg(batch.initialBiomassKg)}</span>
         <span className="text-zinc-500">Peces actuales</span>
-        <span className="font-medium">{totalNow.toLocaleString("es")}</span>
+        <span className="font-medium">{formatCount(totalNow)}</span>
+        <span className="text-zinc-500">Supervivencia</span>
+        <span className="font-medium">
+          {summary?.survivalPercent != null ? formatPercent(summary.survivalPercent) : "—"}
+        </span>
+        <span className="text-zinc-500">Mortalidad</span>
+        <span className="font-medium">
+          {summary?.mortalityPercent != null ? formatPercent(summary.mortalityPercent) : "—"}
+          {summary && summary.mortalityTotal > 0 ? ` (${formatCount(summary.mortalityTotal)})` : ""}
+        </span>
+        <span className="text-zinc-500">Peso estimado actual</span>
+        <span className="font-medium">
+          {summary?.averageWeightG != null ? formatG(summary.averageWeightG) : "—"}
+          {summary && !summary.allFromSampling && summary.averageWeightG != null
+            ? " (estimado)"
+            : ""}
+        </span>
+        <span className="text-zinc-500">Biomasa estimada</span>
+        <span className="font-medium">{summary ? formatKg(summary.totalBiomassKg) : "—"}</span>
+        <span className="text-zinc-500">Alimento acumulado</span>
+        <span className="font-medium">{formatKg(totalFeedKg)}</span>
+        <span className="text-zinc-500">Crecimiento diario</span>
+        <span className="font-medium">
+          {growth?.available ? `${formatG(growth.dailyGrowthG)}/día` : "Datos insuficientes"}
+        </span>
+        <span className="text-zinc-500">FCR estimado</span>
+        <span className="font-medium">
+          {fcr ? fcr.fcr.toLocaleString("es", { maximumFractionDigits: 2 }) : "Datos insuficientes"}
+        </span>
       </section>
+
+      {growth?.available && (
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          Crecimiento y FCR calculados entre el muestreo del{" "}
+          {formatDate(previousSampling!.date)} ({formatG(previousSampling!.averageWeightG)}) y el
+          del {formatDate(currentSampling!.date)} ({formatG(currentSampling!.averageWeightG)}),
+          con {formatKg(periodFeedKg)} de alimento registrado en ese período. Estimación: no
+          descuenta la biomasa exacta de los peces que murieron en el período.
+        </p>
+      )}
 
       <section className="flex flex-col gap-2">
         <div className="flex items-center justify-between">
@@ -314,24 +408,47 @@ export default function FishBatchDetailPage({ params }: PageProps<"/lotes/[id]">
       <section className="flex flex-col gap-2">
         <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Historial</h3>
         <ul className="flex flex-col gap-2 text-sm">
-          {history.map((event) => (
-            <li
-              key={event.record.id}
-              className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-2 dark:border-zinc-800 dark:bg-zinc-900"
-            >
-              <span>
-                {formatDate(event.date)} —{" "}
-                {event.kind === "stocking"
-                  ? `Siembra ${pondById.get(event.record.pondId)?.code ?? ""}`
-                  : `Traslado ${pondById.get(event.record.fromPondId)?.code ?? "?"} → ${
-                      pondById.get(event.record.toPondId)?.code ?? "?"
-                    }`}
-              </span>
-              <span className="tabular-nums">
-                {event.record.quantity.toLocaleString("es")} peces
-              </span>
-            </li>
-          ))}
+          {history.map((event) => {
+            let label: string;
+            let value: string;
+            switch (event.kind) {
+              case "stocking":
+                label = `Siembra ${pondById.get(event.record.pondId)?.code ?? ""}`;
+                value = `${formatCount(event.record.quantity)} peces`;
+                break;
+              case "transfer":
+                label = `Traslado ${pondById.get(event.record.fromPondId)?.code ?? "?"} → ${
+                  pondById.get(event.record.toPondId)?.code ?? "?"
+                }`;
+                value = `${formatCount(event.record.quantity)} peces`;
+                break;
+              case "mortality":
+                label = `Mortalidad ${pondById.get(event.record.pondId)?.code ?? ""} — ${
+                  MORTALITY_CAUSE_LABEL[event.record.cause]
+                }`;
+                value = `${formatCount(event.record.quantity)} peces`;
+                break;
+              case "feeding":
+                label = `Alimentación ${pondById.get(event.record.pondId)?.code ?? ""}`;
+                value = formatKg(event.record.quantityKg);
+                break;
+              case "sampling":
+                label = `Muestreo ${pondById.get(event.record.pondId)?.code ?? ""}`;
+                value = formatG(event.record.averageWeightG);
+                break;
+            }
+            return (
+              <li
+                key={event.record.id}
+                className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-2 dark:border-zinc-800 dark:bg-zinc-900"
+              >
+                <span>
+                  {formatDate(event.date)} — {label}
+                </span>
+                <span className="tabular-nums">{value}</span>
+              </li>
+            );
+          })}
         </ul>
       </section>
     </div>

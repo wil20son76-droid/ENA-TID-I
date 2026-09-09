@@ -4,12 +4,15 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { SyncStatusBadge } from "@/components/sync/SyncStatusBadge";
+import { QuickRegisterButton } from "./QuickRegisterButton";
 
 const NAV_ITEMS = [
   { href: "/", label: "Inicio", icon: "🏠" },
   { href: "/especies", label: "Especies", icon: "🐟" },
   { href: "/lotes", label: "Lotes", icon: "📦" },
   { href: "/estanques", label: "Estanques", icon: "🌊" },
+  { href: "/alimentacion", label: "Alimentación", icon: "🍽️" },
+  { href: "/mortalidad", label: "Mortalidad", icon: "💀" },
 ] as const;
 
 function isActive(pathname: string, href: string): boolean {
@@ -59,6 +62,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </header>
 
       <main className="mx-auto w-full max-w-3xl flex-1 px-4 pb-24 pt-4">{children}</main>
+
+      <QuickRegisterButton />
 
       <nav
         className="fixed inset-x-0 bottom-0 z-10 border-t border-zinc-200 bg-white/95 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95"

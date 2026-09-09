@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useLiveQuery } from "dexie-react-hooks";
 
-import { getBatchTotalBalance } from "@/lib/domain/batchLedger";
+import { getBatchProductionSummary } from "@/lib/domain/productionSummary";
+import { getAllFeedStocks } from "@/lib/domain/feedLedger";
+import { formatCount, formatKg } from "@/lib/domain/format";
 import { db } from "@/lib/db/schema";
 
 function StatCard({
@@ -28,29 +30,84 @@ function StatCard({
   );
 }
 
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function isSameDate(isoDateTime: string, isoDate: string): boolean {
+  return isoDateTime.slice(0, 10) === isoDate;
+}
+
+function isSameMonth(isoDateTime: string, reference: string): boolean {
+  return isoDateTime.slice(0, 7) === reference.slice(0, 7);
+}
+
 export default function DashboardPage() {
   const data = useLiveQuery(async () => {
-    const [species, ponds, batches, stockings, transfers] = await Promise.all([
-      db.species.toArray(),
-      db.ponds.toArray(),
-      db.fishBatches.toArray(),
-      db.stockings.toArray(),
-      db.fishTransfers.toArray(),
-    ]);
+    const [species, ponds, batches, stockings, transfers, mortalities, samplings, feedings, feeds, movements] =
+      await Promise.all([
+        db.species.toArray(),
+        db.ponds.toArray(),
+        db.fishBatches.toArray(),
+        db.stockings.toArray(),
+        db.fishTransfers.toArray(),
+        db.mortalityRecords.toArray(),
+        db.samplings.toArray(),
+        db.feedingRecords.toArray(),
+        db.feeds.toArray(),
+        db.feedInventoryMovements.toArray(),
+      ]);
 
     const activeBatches = batches.filter((b) => !b.deletedAt);
-    const livingFish = activeBatches.reduce(
-      (sum, batch) => sum + getBatchTotalBalance(stockings, transfers, batch.id),
-      0,
-    );
-    const initialBiomassKg = activeBatches.reduce((sum, batch) => sum + batch.initialBiomassKg, 0);
+    let livingFish = 0;
+    let estimatedBiomassKg = 0;
+    for (const batch of activeBatches) {
+      const summary = getBatchProductionSummary(
+        stockings,
+        transfers,
+        mortalities,
+        samplings,
+        batch.id,
+        batch.initialAverageWeightG,
+      );
+      livingFish += summary.totalQuantity;
+      estimatedBiomassKg += summary.totalBiomassKg;
+    }
+
+    const today = todayIsoDate();
+    const mortalityToday = mortalities
+      .filter((m) => !m.deletedAt && isSameDate(m.date, today))
+      .reduce((sum, m) => sum + m.quantity, 0);
+    const mortalityTotal = mortalities
+      .filter((m) => !m.deletedAt)
+      .reduce((sum, m) => sum + m.quantity, 0);
+
+    const feedToday = feedings
+      .filter((f) => !f.deletedAt && isSameDate(f.date, today))
+      .reduce((sum, f) => sum + f.quantityKg, 0);
+    const feedThisMonth = feedings
+      .filter((f) => !f.deletedAt && isSameMonth(f.date, today))
+      .reduce((sum, f) => sum + f.quantityKg, 0);
+
+    const activeFeeds = feeds.filter((f) => f.active && !f.deletedAt);
+    const stocks = getAllFeedStocks(movements);
+    const totalFeedStockKg = activeFeeds.reduce((sum, f) => sum + (stocks[f.id] ?? 0), 0);
+    const lowStockFeedsCount = activeFeeds.filter(
+      (f) => f.minimumStockKg != null && (stocks[f.id] ?? 0) <= f.minimumStockKg,
+    ).length;
 
     return {
       activeSpeciesCount: species.filter((s) => s.active && !s.deletedAt).length,
       activePondsCount: ponds.filter((p) => !p.deletedAt).length,
       activeBatchesCount: activeBatches.length,
       livingFish,
-      initialBiomassKg,
+      estimatedBiomassKg,
+      mortalityToday,
+      mortalityTotal,
+      feedToday,
+      feedThisMonth,
+      totalFeedStockKg,
+      lowStockFeedsCount,
     };
   }, []);
 
@@ -58,7 +115,13 @@ export default function DashboardPage() {
   const activePondsCount = data?.activePondsCount ?? 0;
   const activeBatchesCount = data?.activeBatchesCount ?? 0;
   const livingFish = data?.livingFish ?? 0;
-  const initialBiomassKg = data?.initialBiomassKg ?? 0;
+  const estimatedBiomassKg = data?.estimatedBiomassKg ?? 0;
+  const mortalityToday = data?.mortalityToday ?? 0;
+  const mortalityTotal = data?.mortalityTotal ?? 0;
+  const feedToday = data?.feedToday ?? 0;
+  const feedThisMonth = data?.feedThisMonth ?? 0;
+  const totalFeedStockKg = data?.totalFeedStockKg ?? 0;
+  const lowStockFeedsCount = data?.lowStockFeedsCount ?? 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -75,21 +138,33 @@ export default function DashboardPage() {
       <div className="grid grid-cols-2 gap-3">
         <StatCard label="Estanques activos" value={activePondsCount} href="/estanques" />
         <StatCard label="Lotes activos" value={activeBatchesCount} href="/lotes" />
-        <StatCard label="Peces sembrados" value={livingFish.toLocaleString("es")} href="/lotes" />
+        <StatCard label="Peces vivos estimados" value={formatCount(livingFish)} href="/lotes" />
+        <StatCard label="Biomasa estimada" value={formatKg(estimatedBiomassKg)} href="/lotes" />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <StatCard label="Mortalidad hoy" value={formatCount(mortalityToday)} href="/mortalidad" />
         <StatCard
-          label="Biomasa inicial (kg)"
-          value={initialBiomassKg.toLocaleString("es", { maximumFractionDigits: 1 })}
-          href="/lotes"
+          label="Mortalidad acumulada"
+          value={formatCount(mortalityTotal)}
+          href="/mortalidad"
         />
+        <StatCard label="Alimento hoy" value={formatKg(feedToday)} href="/alimentacion" />
+        <StatCard label="Alimento este mes" value={formatKg(feedThisMonth)} href="/alimentacion" />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <StatCard label="Stock total de alimento" value={formatKg(totalFeedStockKg)} href="/alimentos" />
+        <StatCard label="Alimentos bajo mínimo" value={lowStockFeedsCount} href="/alimentos" />
       </div>
 
       <StatCard label="Especies" value={activeSpeciesCount} href="/especies" />
 
       <div className="flex flex-col gap-2 rounded-xl border border-dashed border-zinc-300 p-4 text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
         <p>
-          Fase 2: especies, estanques, lotes, siembras y traslados
-          offline-first con sincronización automática. Alimentación,
-          mortalidad, muestreos, cosechas y ventas se añaden en las próximas
+          Fase 3: alimentación, inventario de alimento, mortalidad y
+          muestreos offline-first, integrados en el ledger de peces.
+          Calidad de agua, cosechas y ventas se añaden en las próximas
           fases.
         </p>
       </div>

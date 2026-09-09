@@ -1,0 +1,50 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+
+const OPTIONS = [
+  { href: "/alimentacion/nueva", label: "Alimentación", icon: "🍽️" },
+  { href: "/mortalidad/nueva", label: "Mortalidad", icon: "💀" },
+  { href: "/muestreos/nuevo", label: "Muestreo", icon: "📏" },
+] as const;
+
+/**
+ * Botón "+ Registrar" global (§38 del encargo de Fase 3): presente en
+ * cualquier pantalla principal, no solo dentro de la ficha de un
+ * estanque/lote concreto — por eso vive en AppShell en vez de en cada
+ * página. Las páginas de destino piden el estanque/lote manualmente
+ * cuando no llegan preseleccionados.
+ */
+export function QuickRegisterButton() {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="fixed bottom-20 right-4 z-20 flex flex-col items-end gap-2">
+      {open && (
+        <div className="flex flex-col gap-1 rounded-xl border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
+          {OPTIONS.map((option) => (
+            <Link
+              key={option.href}
+              href={option.href}
+              onClick={() => setOpen(false)}
+              className="flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+            >
+              <span aria-hidden="true">{option.icon}</span>
+              {option.label}
+            </Link>
+          ))}
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-label={open ? "Cerrar registro rápido" : "Registrar"}
+        className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-700 text-2xl leading-none text-white shadow-lg transition-transform hover:bg-emerald-800 active:scale-95"
+      >
+        {open ? "×" : "+"}
+      </button>
+    </div>
+  );
+}

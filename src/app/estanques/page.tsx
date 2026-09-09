@@ -22,10 +22,11 @@ function formatNumber(value: number | null, unit: string): string {
 
 export default function PondsPage() {
   const data = useLiveQuery(async () => {
-    const [ponds, stockings, transfers] = await Promise.all([
+    const [ponds, stockings, transfers, mortalities] = await Promise.all([
       db.ponds.toArray(),
       db.stockings.toArray(),
       db.fishTransfers.toArray(),
+      db.mortalityRecords.toArray(),
     ]);
     return {
       ponds: ponds
@@ -33,12 +34,14 @@ export default function PondsPage() {
         .sort((a, b) => a.code.localeCompare(b.code, "es")),
       stockings,
       transfers,
+      mortalities,
     };
   }, []);
 
   const ponds = data?.ponds ?? [];
   const stockings = data?.stockings ?? [];
   const transfers = data?.transfers ?? [];
+  const mortalities = data?.mortalities ?? [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -66,7 +69,7 @@ export default function PondsPage() {
           </li>
         )}
         {ponds.map((pond) => {
-          const occupancy = getPondOccupancy(stockings, transfers, pond.id);
+          const occupancy = getPondOccupancy(stockings, transfers, mortalities, pond.id);
           const batchCount = Object.keys(occupancy).length;
 
           return (
