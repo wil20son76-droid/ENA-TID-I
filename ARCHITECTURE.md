@@ -1,11 +1,12 @@
 # ARCHITECTURE.md
 
 Este documento describe **cómo está construido lo que ya existe** (Fases
-1 y 2). Para la arquitectura objetivo completa del proyecto (todas las
+1, 2 y 3). Para la arquitectura objetivo completa del proyecto (todas las
 fases, modelo de datos completo, riesgos) ver [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md).
 Para el detalle específico de offline/sincronización, con diagramas, ver
-[`OFFLINE_SYNC.md`](./OFFLINE_SYNC.md) — incluida su §8, con el modelo de
-lotes/siembras/traslados de la Fase 2.
+[`OFFLINE_SYNC.md`](./OFFLINE_SYNC.md) — su §8 documenta el modelo de
+lotes/siembras/traslados (Fase 2) y su §9 el de alimento/mortalidad/
+muestreos (Fase 3).
 
 ## 1. Visión general
 
@@ -45,7 +46,7 @@ sincronización, y su ausencia nunca bloquea ni degrada la experiencia
 
 ## 2. Capas y responsabilidades
 
-### `src/lib/domain/` — dominio puro (Fase 2)
+### `src/lib/domain/` — dominio puro (Fases 2 y 3)
 
 Funciones puras, sin dependencias de Dexie ni de Prisma, importadas por
 igual desde el cliente (repositorios) y el servidor
@@ -54,29 +55,54 @@ una, nunca dos implementaciones que puedan divergir:
 
 - `batchLedger.ts`: cálculo de dónde está un lote (`getBatchPondBalance`,
   `getBatchDistribution`, `getBatchTotalBalance`, `getPondOccupancy`) a
-  partir de sus eventos de siembra/traslado — nunca de un campo mutable.
-  Ver `OFFLINE_SYNC.md` §8.1.
+  partir de siembras, traslados **y mortalidad** — nunca de un campo
+  mutable. También `getSurvivalPercent`/`getMortalityPercent`. Ver
+  `OFFLINE_SYNC.md` §8.1 y §9.5.
 - `biomass.ts`: `calculateBiomassKg(cantidad, pesoPromedioG)`.
 - `batchCode.ts`: código de lote único generable offline (especie + año +
   secuencia local + sufijo de dispositivo). Ver `OFFLINE_SYNC.md` §8.4.
 - `pondGeometry.ts`: estado calculado-vs-manual de área/volumen de un
   estanque a partir de largo/ancho/profundidad, sin sobrescribir un valor
   manual sin avisar.
+- `feedLedger.ts` (Fase 3): signo único de cada tipo de movimiento de
+  inventario de alimento y stock derivado del ledger — nunca un
+  `Feed.stockKg`. Ver `OFFLINE_SYNC.md` §9.1.
+- `sampling.ts` (Fase 3): peso promedio de un muestreo y peso estimado
+  por lote+estanque (último muestreo, o el peso de siembra si no hay
+  ninguno), con agregado ponderado cuando el lote está repartido. Ver
+  `OFFLINE_SYNC.md` §9.5.
+- `growth.ts` / `fcr.ts` (Fase 3): crecimiento diario y FCR operacional
+  entre dos muestreos, ambos con "datos insuficientes" explícito en vez
+  de `Infinity`/`NaN`. Ver `OFFLINE_SYNC.md` §9.6.
+- `ration.ts` (Fase 3): calculadora de ración diaria recomendada — nunca
+  crea movimientos de inventario por sí sola.
+- `format.ts` (Fase 3): redondeo y formato numérico centralizados (kg,
+  g, %, conteo) en locale es.
+- `productionSummary.ts` (Fase 3): combina lo anterior en un resumen de
+  producción por lote (peces actuales, supervivencia/mortalidad %,
+  biomasa calculada por estanque, nunca cantidad total × un único
+  peso).
 
 ### `src/lib/db/` — datos locales
 
 - `schema.ts`: define `AppDatabase extends Dexie` con las tablas
   `species`, `ponds`, `fishBatches`, `stockings`, `fishTransfers`,
-  `syncQueue`, `syncMeta`, versionadas explícitamente
-  (`this.version(1).stores(...)`, `this.version(2).stores(...)`).
+  `feeds`, `feedInventoryMovements`, `feedingRecords`,
+  `mortalityRecords`, `samplings`, `syncQueue`, `syncMeta`, versionadas
+  explícitamente (`this.version(1).stores(...)` … `this.version(3).stores(...)`).
   Cualquier cambio de esquema agrega una nueva versión, nunca modifica
   la existente, para no perder datos de dispositivos que llevaban tiempo
-  sin sincronizar — la v2 de la Fase 2 se probó explícitamente contra una
-  base con datos de la v1 ya presentes (`schemaUpgrade.test.ts`).
+  sin sincronizar — cada salto de versión se probó explícitamente contra
+  una base con datos de la versión anterior ya presentes
+  (`schemaUpgrade.test.ts`).
 - `types.ts`: tipos de dominio (`SpeciesRecord`, `PondRecord`,
-  `FishBatchRecord`, `StockingRecord`, `FishTransferRecord`, ...),
-  independientes del cliente Prisma generado — el navegador nunca importa
-  código orientado a Node.
+  `FishBatchRecord`, `StockingRecord`, `FishTransferRecord`,
+  `FeedRecord`, `FeedInventoryMovementRecord`, `FeedingRecordRecord`,
+  `MortalityRecordRecord`, `SamplingRecord`, ...), independientes del
+  cliente Prisma generado — el navegador nunca importa código orientado
+  a Node. También define `EventAuditFields` (campos de auditoría
+  reducidos de los eventos append-only), reexportado desde
+  `repositories/base.ts` para no romper el resto del código.
 - `deviceId.ts` / `uuid.ts`: identificador de instalación persistente
   (`localStorage`) y generación de UUID v4 en el dispositivo para toda
   entidad nueva.
@@ -100,7 +126,22 @@ una, nunca dos implementaciones que puedan divergir:
   escribir — ver `OFFLINE_SYNC.md` §8.2.
 - `repositories/ledgerQueries.ts`: consultas de solo lectura sobre el
   ledger para la UI (`getBatchDistribution`, `getBatchHistory`,
-  `getPondOccupancy`, `getPondHistory`).
+  `getPondOccupancy`, `getPondHistory`, y desde la Fase 3
+  `getBatchProductionSummary`: peso/biomasa/supervivencia estimados).
+- `repositories/feedRepository.ts` (Fase 3): `createFeed` crea el
+  alimento y, si se indica, su `FeedInventoryMovement` `INITIAL_STOCK`
+  en una transacción — mismo patrón que `createFishBatchWithStocking`.
+- `repositories/feedingRepository.ts` (Fase 3):
+  `createFeedingWithConsumption` crea `FeedingRecord` +
+  `FeedInventoryMovement` `CONSUMPTION` vinculados
+  (`sourceType: "FEEDING"`) en una transacción, validando el stock
+  disponible antes de escribir.
+- `repositories/mortalityRepository.ts` (Fase 3): `createMortality`
+  valida el balance del estanque (mismo criterio que los traslados)
+  antes de escribir.
+- `repositories/samplingRepository.ts` (Fase 3): `createSampling`
+  calcula `averageWeightG` automáticamente y valida que el lote tenga
+  registro en el estanque seleccionado.
 - `repositories/syncQueueRepository.ts`: lectura/escritura de la cola de
   sincronización y de `syncMeta` (cursor `lastSyncedAt`), usado solo por
   el motor de sync, nunca por la UI directamente.
@@ -137,47 +178,73 @@ servidor (API routes).
   clave de idempotencia — ver `OFFLINE_SYNC.md` §3.
 - `pull/route.ts`: entrega cambios posteriores a `?since=`, calculando su
   propio cursor (`serverTime`) antes de leer, para que el cliente nunca
-  dé por sincronizado un cambio que llegó a mitad de la consulta. Desde
-  la Fase 2 también entrega `fishBatches`, `stockings` y `fishTransfers`
-  (estos dos últimos filtrados por `createdAt`, no `updatedAt`: son
-  append-only, nunca se actualizan).
+  dé por sincronizado un cambio que llegó a mitad de la consulta.
+  Entrega `fishBatches`/`stockings`/`fishTransfers` (Fase 2) y
+  `feeds`/`feedInventoryMovements`/`feedingRecords`/`mortalityRecords`/
+  `samplings` (Fase 3); las entidades append-only se filtran por
+  `createdAt`, no `updatedAt` — nunca se actualizan.
 - `_lib/applyOperation.ts`: aplica CREATE/UPDATE/DELETE con resolución de
   conflictos last-write-wins por número de versión para `Species`/`Pond`/
-  `FishBatch`. Para `FishTransfer` aplica además la validación de
-  balance con bloqueo de concurrencia (`pg_advisory_xact_lock`) descrita
-  en `OFFLINE_SYNC.md` §8.3 — un traslado que dejaría el origen negativo
-  vuelve `status: "conflict"` en vez de aplicarse.
+  `FishBatch`/`Feed`. Para `FishTransfer` y `MortalityRecord` aplica
+  además la validación de balance de peces con bloqueo de concurrencia
+  (`pg_advisory_xact_lock` por `batchId`) descrita en `OFFLINE_SYNC.md`
+  §8.3; para `FeedInventoryMovement` de tipo salida (`CONSUMPTION`,
+  `ADJUSTMENT_OUT`, `LOSS`) aplica el mismo mecanismo con un lock por
+  `feedId` (§9.4). Un movimiento/registro que dejaría un balance
+  negativo vuelve `status: "conflict"` en vez de aplicarse.
 
 ### `src/app/` — UI
 
 - `layout.tsx`: shell raíz (español, metadata, `SyncProvider` +
   `ServiceWorkerRegister` + `InstallPrompt` montados una vez).
 - `page.tsx`: dashboard con conteos en vivo (`useLiveQuery` sobre Dexie):
-  estanques activos, lotes activos, peces sembrados (vía
-  `getBatchTotalBalance`) y biomasa inicial disponible. Deliberadamente
-  sin analítica compleja todavía (§36 del encargo de Fase 2).
-- `especies/page.tsx`: registro rápido (formulario mínimo) + lista en
-  vivo, pensado para completarse en segundos desde un teléfono (§75 del
-  encargo de Fase 1).
+  estanques/lotes activos, peces vivos y biomasa estimados (vía
+  `getBatchProductionSummary`), mortalidad hoy/acumulada, alimento hoy/
+  este mes, stock total de alimento y alimentos bajo mínimo.
+  Deliberadamente sin analítica compleja todavía (§35 del encargo de
+  Fase 3).
+- `especies/page.tsx`: alta/edición completas (incluidos los campos
+  productivos opcionales — peso objetivo, ciclo, temperatura/pH/
+  oxígeno, FCR y mortalidad esperados) + lista en vivo, pensado para
+  completarse en segundos desde un teléfono (§75 del encargo de Fase 1).
 - `estanques/page.tsx` + `estanques/nuevo/page.tsx` + `estanques/[id]/page.tsx`:
   listado con superficie/volumen/lotes (derivado de `getPondOccupancy`,
   nunca guardado); alta con geometría calculada-vs-manual
-  (`PondGeometryFields`); ficha con edición de geometría in situ,
-  producción actual y el historial de siembras/traslados que involucran
-  ese estanque (`getPondHistory`).
+  (`PondGeometryFields`); ficha con pestañas Resumen/Producción/
+  Alimentación/Mortalidad/Muestreos/Historial, peces y biomasa
+  estimados del estanque, y accesos directos a los tres registros
+  rápidos con el estanque preseleccionado.
 - `lotes/page.tsx` + `lotes/nuevo/page.tsx` + `lotes/[id]/page.tsx`:
   listado con ubicación derivada (`getBatchDistribution`); alta
   transaccional de lote + siembra inicial con preview de biomasa; ficha
-  con distribución actual por estanque, el formulario de "Traslado
-  rápido" (preview Disponibles/Trasladar/Quedarán, ver
-  `OFFLINE_SYNC.md` §8.2) e historial combinado de siembras y traslados.
+  con distribución actual, "Traslado rápido" (preview Disponibles/
+  Trasladar/Quedarán, `OFFLINE_SYNC.md` §8.2), supervivencia/
+  mortalidad %, peso y biomasa estimados, alimento acumulado,
+  crecimiento diario y FCR estimado (§9.5-§9.6), e historial combinado
+  de los 5 tipos de evento.
+- `alimentos/page.tsx` (Fase 3): catálogo de alimentos con stock
+  inicial opcional al crear.
+- `alimentacion/page.tsx` + `alimentacion/nueva/page.tsx` (Fase 3):
+  resumen de hoy por estanque/alimento e historial; registro rápido que
+  solo muestra los lotes presentes en el estanque elegido y el stock
+  disponible del alimento antes de guardar.
+- `mortalidad/page.tsx` + `mortalidad/nueva/page.tsx` (Fase 3): hoy/
+  semana/acumulada por estanque e historial; registro rápido con
+  preview de cuántos quedarán.
+- `muestreos/nuevo/page.tsx` (Fase 3): registro rápido con preview del
+  peso promedio calculado.
 - `manifest.ts`, `icons/[size]/route.tsx`: metadatos de PWA (ver
   `IMPLEMENTATION_PLAN.md` §7).
 
 ### `src/components/`
 
 - `layout/AppShell.tsx`: header con el badge de sincronización +
-  navegación inferior mobile-first (Inicio, Especies, Lotes, Estanques).
+  navegación inferior mobile-first (Inicio, Especies, Lotes, Estanques,
+  Alimentación, Mortalidad).
+- `layout/QuickRegisterButton.tsx` (Fase 3): botón "+ Registrar"
+  flotante presente en cualquier pantalla (§38 del encargo), con acceso
+  directo a los tres registros rápidos (Alimentación/Mortalidad/
+  Muestreo) sin depender de estar dentro de una ficha concreta.
 - `sync/SyncStatusBadge.tsx`: indicador 🟢/🟠/🔴/⚫ + botón "Sincronizar ahora".
 - `sync/SyncProvider.tsx`: arranca el motor de sync una vez para toda la app.
 - `pwa/ServiceWorkerRegister.tsx`, `pwa/InstallPrompt.tsx`: registro del service worker y aviso discreto de instalación.
@@ -187,7 +254,7 @@ servidor (API routes).
 
 ## 3. Modelo de datos actual
 
-`prisma/schema.prisma` (Fases 1 y 2):
+`prisma/schema.prisma` (Fases 1, 2 y 3):
 
 - **`Species`** — catálogo de especies productivo: nombre, peso objetivo,
   ciclo estimado, rangos de temperatura/pH/oxígeno, FCR y mortalidad
@@ -206,22 +273,38 @@ servidor (API routes).
   de origen y de destino, fecha, cantidad. Soporta traslados parciales
   (un lote puede repartirse entre varios estanques) y queda validado
   contra el balance disponible — ver `OFFLINE_SYNC.md` §8.2-§8.3.
+- **`Feed`** — catálogo de alimentos: nombre, marca, % proteína, tamaño
+  de pellet, costo por defecto, stock mínimo. Mutable, igual criterio
+  que `Species`/`Pond`.
+- **`FeedInventoryMovement`** — evento de movimiento de inventario de
+  alimento (append-only): tipo, `quantityKg` siempre positivo (el signo
+  lo decide el tipo, ver `OFFLINE_SYNC.md` §9.1), `sourceType`/
+  `sourceId` opcionales para vincular un consumo a su `FeedingRecord`
+  de origen (`@@unique([sourceType, sourceId])`, §9.2).
+- **`FeedingRecord`** — registro de alimentación (append-only): lote,
+  estanque, alimento, cantidad, turno/hora opcionales.
+- **`MortalityRecord`** — mortalidad (append-only): lote, estanque,
+  cantidad, causa. Integrada en el ledger de peces como una salida más
+  (§9.5).
+- **`Sampling`** — muestreo (append-only): lote, estanque, peces/peso
+  muestreados, `averageWeightG` ya calculado.
 - **`SyncOperation`** — registro de operaciones de sync procesadas por el
   servidor; `operationId` es la clave de idempotencia.
 
-`Species`, `Pond` y `FishBatch` comparten los mismos campos de auditoría
-(`createdAt`, `updatedAt`, `deletedAt`, `version`, `deviceId`,
+`Species`, `Pond`, `FishBatch` y `Feed` comparten los mismos campos de
+auditoría (`createdAt`, `updatedAt`, `deletedAt`, `version`, `deviceId`,
 `createdBy`, `updatedBy`) tanto en Prisma como en Dexie, con los mismos
 nombres — el mapeo entre ambos lados es directo, y `version` es la base
 de la resolución de conflictos last-write-wins (§6 de `OFFLINE_SYNC.md`).
-`Stocking` y `FishTransfer`, al ser append-only, no tienen `version` ni
-`updatedAt`: nunca se editan, así que no hay nada que resolver por ese
-mecanismo — su único conflicto posible es el de balance (§8.3).
+`Stocking`, `FishTransfer`, `FeedInventoryMovement`, `FeedingRecord`,
+`MortalityRecord` y `Sampling`, al ser append-only, no tienen `version`
+ni `updatedAt`: nunca se editan, así que no hay nada que resolver por
+ese mecanismo — su único conflicto posible es el de balance (§8.3, §9.4).
 
-El modelo de datos completo del dominio piscícola restante
-(alimentación, mortalidad, muestreos, cosechas, ventas...) está
-documentado en `IMPLEMENTATION_PLAN.md` §4 y se implementa de forma
-incremental en las siguientes fases.
+El modelo de datos completo del dominio piscícola restante (calidad de
+agua, cosechas, ventas, rentabilidad...) está documentado en
+`IMPLEMENTATION_PLAN.md` §4 y se implementa de forma incremental en las
+siguientes fases.
 
 ## 4. Decisiones de arquitectura tomadas durante la Fase 1
 
@@ -278,13 +361,51 @@ que no se repitan las mismas dudas en fases futuras:
    sola entidad — un lote nunca puede quedar creado sin su siembra
    inicial si algo falla a mitad de camino.
 
+## 4.2 Decisiones de arquitectura tomadas durante la Fase 3
+
+1. **El inventario de alimento sigue el mismo principio de ledger que
+   los peces**: `Feed` nunca tiene un `stockKg` mutable; se deriva
+   siempre de `FeedInventoryMovement`. El signo de cada movimiento
+   (entrada/salida) lo decide una única función
+   (`getFeedMovementSignedQuantity`), nunca cada pantalla por su
+   cuenta. Ver `OFFLINE_SYNC.md` §9.1.
+2. **La mortalidad se integra al ledger de peces como una salida más**,
+   con el mismo tratamiento que un traslado saliente — no se creó un
+   cálculo de balance paralelo. `getBatchPondBalance` pasó a recibir
+   `mortalities` como tercer parámetro explícito en vez de un default
+   opcional, para que cada punto de llamada declare a propósito qué
+   eventos está considerando.
+3. **El peso estimado nunca es un único valor global del lote**: se
+   calcula por combinación `batchId`+`pondId` (último muestreo de esa
+   combinación exacta, o el peso de siembra si no hay ninguno) y la
+   biomasa total se arma sumando el componente de cada estanque —
+   nunca `peces totales × un peso`. Ver `OFFLINE_SYNC.md` §9.5.
+4. **FCR y crecimiento se marcan siempre como estimados**: el cálculo
+   usa la cantidad *actual* del lote para aislar el efecto del cambio
+   de peso entre dos muestreos, una simplificación documentada que no
+   reconstruye el historial exacto de biomasa en cada fecha pasada. Se
+   prefirió esta aproximación simple y honesta, con la etiqueta
+   "estimado" siempre visible, a no ofrecer el dato o a presentarlo con
+   una falsa precisión. Ver `OFFLINE_SYNC.md` §9.6.
+5. **El plan de ración diaria es solo una calculadora**: nunca crea un
+   `FeedInventoryMovement` por sí sola. Solo un `FeedingRecord`
+   registrado a mano descuenta stock — "planificado" y "real" son
+   conceptos deliberadamente separados (§32 del encargo de Fase 3).
+6. **`EventAuditFields` se movió de `repositories/base.ts` a
+   `db/types.ts`**: al escribir `types.ts` los nuevos `*Record`
+   extendiendo esa interfaz directamente (en vez de inlinear sus tres
+   campos como se hizo en Fase 2), habría quedado un import circular
+   (`types.ts` → `base.ts` → `types.ts`). Se resolvió moviendo la
+   definición al módulo de tipos, que es conceptualmente donde
+   pertenece, y reexportándola desde `base.ts` para no romper el resto
+   del código que ya la importaba de ahí.
+
 ## 5. Qué NO está implementado todavía
 
-Deliberadamente fuera de alcance de la Fase 2 (ver `IMPLEMENTATION_PLAN.md`
-§9 para el orden de las fases siguientes): alimentación, inventario de
-alimento, mortalidad, muestreos de crecimiento, FCR real, calidad de
-agua, tareas, calendario, proveedores, compradores, cosechas, ventas,
-rentabilidad, informes, autenticación, roles de usuario, gráficos
-avanzados, exportación a PDF/CSV, notificaciones push, y el aviso
-interactivo "nueva versión disponible" del service worker (por ahora se
-actualiza solo, sin avisar).
+Deliberadamente fuera de alcance de la Fase 3 (ver `IMPLEMENTATION_PLAN.md`
+§9 para el orden de las fases siguientes): compras completas y
+proveedores avanzados, gastos generales, ventas, cosechas, rentabilidad
+completa, calidad de agua, sensores, IA, reportes PDF avanzados, tareas,
+calendario, autenticación, roles de usuario, gráficos avanzados,
+notificaciones push, y el aviso interactivo "nueva versión disponible"
+del service worker (por ahora se actualiza solo, sin avisar).

@@ -508,7 +508,7 @@ IMPLEMENTATION_PLAN.md
 | **0 (actual)** | Análisis, arquitectura, este documento | Documento revisado, sin bloqueos críticos pendientes |
 | **1 — Base técnica** ✅ | Next.js/TS/Tailwind/Prisma/Postgres/Railway-ready, PWA base, Dexie + syncQueue, motor de sync mínimo (push/pull), layout y navegación, indicador de conexión | Se puede crear un registro offline de prueba y verlo sincronizado en Postgres al reconectar, sin duplicados |
 | **2 — Producción** ✅ | Species, Pond, FishBatch, Stocking, FishTransfer | Se puede crear especie → estanque → lote → siembra, todo offline |
-| **3 — Operación diaria** | FeedingRecord (+InventoryMovement vinculado), Feed/inventario, MortalityRecord, Sampling, cálculo de biomasa | Registro rápido de alimentación en ≤3 toques; stock e indicadores consistentes |
+| **3 — Operación diaria** ✅ | FeedingRecord (+InventoryMovement vinculado), Feed/inventario, MortalityRecord, Sampling, cálculo de biomasa | Registro rápido de alimentación en ≤3 toques; stock e indicadores consistentes |
 | **4 — Agua y planificación** | WaterQualityRecord + alertas por especie, Task, Calendario | Alertas visibles sin diagnosticar enfermedades; tareas offline |
 | **5 — Economía** | Supplier, Purchase, Expense, Customer, Harvest, Sale, rentabilidad por lote | Flujo cosecha→venta→rentabilidad correcto y trazable |
 | **6 — Analítica** | Dashboard avanzado, gráficos, FCR, informes filtrables | FCR documentado (fuente exacta de datos), "datos insuficientes" cuando corresponda |
@@ -525,6 +525,17 @@ del modelo, la validación de balance en dos capas y el manejo de
 conflictos multi-dispositivo (advisory lock de Postgres) en
 `OFFLINE_SYNC.md` §8; decisiones de arquitectura específicas de la fase
 en `ARCHITECTURE.md` §4.1.
+
+**Fase 3 — completada.** El inventario de alimento sigue el mismo
+principio de ledger que los peces (`Feed` sin `stockKg` mutable,
+derivado siempre de `FeedInventoryMovement`), y la mortalidad se
+integró al ledger de peces como una salida más — nunca se guardó
+"peces actuales" ni "FCR actual" como fuente primaria (§14/§20/§55 de
+este mismo documento). El peso estimado, la biomasa, el crecimiento y
+el FCR se calculan siempre desde el historial, con "datos
+insuficientes" explícito en vez de resultados inventados. Detalle
+completo en `OFFLINE_SYNC.md` §9; decisiones de arquitectura
+específicas de la fase en `ARCHITECTURE.md` §4.2.
 
 ---
 

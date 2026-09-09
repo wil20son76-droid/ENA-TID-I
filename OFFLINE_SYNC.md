@@ -335,3 +335,164 @@ garantiza que dos dispositivos nunca puedan generar el mismo código
 aunque coincida especie, año y secuencia — sin sacrificar la capacidad
 de crear lotes completamente offline, que era el requisito no
 negociable.
+
+## 9. Operación diaria: alimento, mortalidad y muestreos (Fase 3)
+
+### 9.1 Ledger de inventario de alimento
+
+Mismo principio que el ledger de peces: `Feed` **nunca** tiene un
+campo `stockKg`. El stock se deriva siempre de `FeedInventoryMovement`
+(append-only), con `quantityKg` guardado siempre positivo y el signo
+decidido por `movementType` en una única función,
+`getFeedMovementSignedQuantity` (`src/lib/domain/feedLedger.ts`):
+entradas (`PURCHASE`, `INITIAL_STOCK`, `ADJUSTMENT_IN`, `RETURN`) suman;
+salidas (`CONSUMPTION`, `ADJUSTMENT_OUT`, `LOSS`) restan. `getFeedStock`
+sencillamente suma esos movimientos — ninguna pantalla reimplementa la
+regla del signo.
+
+### 9.2 FeedingRecord ↔ FeedInventoryMovement
+
+Registrar alimentación crea **dos** filas ligadas en una sola
+transacción local (`createFeedingWithConsumption`,
+`src/lib/db/repositories/feedingRepository.ts`): el `FeedingRecord`
+(el evento descriptivo — quién, cuándo, cuánto, en qué estanque/lote) y
+un `FeedInventoryMovement` tipo `CONSUMPTION` con
+`sourceType: "FEEDING"` y `sourceId` apuntando al `FeedingRecord`. Esa
+vinculación es la que responde "¿por qué bajó el stock?" sin tener que
+adivinar.
+
+La garantía de "nunca descuenta dos veces" viene de dos capas
+independientes, no de una sola:
+
+1. **Idempotencia general del outbox** (§5): cada una de las dos
+   operaciones tiene su propio `operationId` fijo, generado una sola
+   vez al crear los registros en Dexie. Reenviar el mismo push tres
+   veces (por ejemplo, tras un corte de red a mitad de la respuesta)
+   nunca reaplica su efecto — es exactamente el mismo mecanismo que ya
+   garantiza esto para cualquier entidad desde la Fase 1.
+2. **Restricción única en el servidor** (defensa adicional,
+   `prisma/schema.prisma`): `FeedInventoryMovement` tiene
+   `@@unique([sourceType, sourceId])`. Si por cualquier motivo dos
+   movimientos distintos intentaran vincularse al mismo
+   `FeedingRecord`, Postgres rechazaría el segundo. En la práctica,
+   con la capa 1 ya cerrando el caso normal, esta restricción actúa
+   como red de seguridad ante un futuro bug, no como el mecanismo
+   principal.
+
+### 9.3 Validación de stock: cliente y servidor
+
+Antes de escribir, el cliente calcula el stock disponible con
+`getFeedStock` sobre los movimientos ya en Dexie y rechaza el registro
+si `cantidad > disponible`, sin tocar la base local
+(`No hay suficiente alimento disponible. Stock actual: X kg.`). El
+servidor repite la validación contra el estado real de Postgres dentro
+de la transacción que va a insertar el movimiento — mismo criterio que
+los traslados de peces en Fase 2.
+
+### 9.4 Conflictos multi-dispositivo de inventario
+
+Idéntico patrón al de traslados de peces (§8.3), aplicado a alimento:
+un advisory lock de Postgres por `feedId`
+(`pg_advisory_xact_lock(hashtext(feedId)::bigint)`) serializa los
+movimientos de SALIDA concurrentes del mismo alimento —las de ENTRADA
+nunca pueden dejar el stock negativo, así que no necesitan lock. Dos
+consumos concurrentes que en conjunto superarían el stock disponible
+nunca terminan ambos aplicados: uno gana la carrera (`"applied"`), el
+otro pierde (`"conflict"`, no se inserta nada, el dato sigue en el
+outbox del dispositivo que lo generó para revisión). Verificado con un
+test de concurrencia real —dos invocaciones HTTP en paralelo, no
+secuenciales— en
+`src/app/api/sync/__tests__/dailyOperations.integration.test.ts`.
+
+Mortalidad usa el mismo mecanismo pero reutilizando el lock por
+`batchId` que ya existía para traslados: un registro de mortalidad es,
+para el ledger de peces, una salida más del estanque donde ocurrió
+(§8.1), así que comparte candado y validación de balance con
+`FishTransfer`.
+
+### 9.5 Peso estimado, biomasa y supervivencia
+
+El peso promedio de un lote **nunca** se guarda como un valor mutable.
+`getEstimatedWeightForPond` (`src/lib/domain/sampling.ts`) toma el
+muestreo más reciente de la combinación exacta `batchId`+`pondId`; si
+todavía no hay ninguno, cae al peso inicial de la siembra del lote. Un
+muestreo en un estanque **no** sustituye el peso estimado de otro
+estanque donde está el mismo lote — cada componente de la biomasa se
+calcula con su propio peso antes de sumarse
+(`getBatchProductionSummary`, `src/lib/domain/productionSummary.ts`):
+nunca `cantidad total del lote × un único peso`.
+
+Supervivencia % = peces actuales / peces sembrados × 100; mortalidad %
+= mortalidad acumulada / peces sembrados × 100 — ambas con `null`
+explícito (no división por cero) cuando no hay siembra registrada
+(`getSurvivalPercent`/`getMortalityPercent`, `batchLedger.ts`).
+
+### 9.6 Crecimiento y FCR: siempre "estimado", nunca falsa precisión
+
+Crecimiento y FCR (`src/lib/domain/growth.ts`, `fcr.ts`) se calculan
+entre los **dos muestreos más recientes** del lote. El alimento
+consumido se acota estrictamente a ese intervalo de fechas —nunca se
+mezcla alimento de fuera del período—, y el incremento de biomasa usa
+la cantidad **actual** del lote multiplicada por la diferencia de peso
+entre ambos muestreos (`totalNow × (pesoActual - pesoAnterior) / 1000`),
+una simplificación documentada: no reconstruye la cantidad exacta que
+había en cada fecha pasada, así que no descuenta con precisión la
+biomasa de los peces que murieron a mitad del período. Por eso
+`calculateFcr` siempre marca `estimated: true` y la UI siempre rotula
+"FCR estimado" — nunca se presenta como un valor contable exacto. Con
+menos de dos muestreos comparables, ambos cálculos devuelven
+"Datos insuficientes" en vez de un número inventado o `Infinity`/`NaN`.
+
+### 9.7 Orden de sincronización de operaciones dependientes
+
+Un `FeedingRecord` depende de `Feed`, `FishBatch` y `Pond`; los cinco
+pueden haberse creado enteramente offline en la misma sesión, en un
+orden distinto para cada dispositivo (§42 del encargo de Fase 3). El
+outbox (`syncQueue`) no implementa un ordenamiento topológico
+explícito — se apoya en dos garantías que ya existían desde la Fase 1:
+
+1. **Orden por `createdAt`**: `collectEligibleOperations` (§4) ordena
+   siempre por fecha de creación ascendente. Como la UI solo deja
+   elegir una entidad ya existente (el selector de "Alimento" en
+   `/alimentacion/nueva` no puede mostrar un alimento que no se haya
+   guardado antes), el padre **siempre** tiene un `createdAt` igual o
+   anterior al del hijo — nunca posterior.
+2. **Autocorrección ante un empate o un envío fuera de orden**: si dos
+   operaciones comparten el mismo `createdAt` (posible cuando una
+   creación compuesta como lote+siembra encola dos operaciones casi
+   simultáneas) y llegan al servidor en el orden equivocado, la
+   inserción del hijo falla por una violación de llave foránea real de
+   Postgres — el servidor la registra como `"error"` (nunca
+   `"conflict"` ni una pérdida silenciosa) y la deja en el outbox local
+   para reintentar. En el siguiente ciclo de sincronización el padre ya
+   está aplicado, así que el reintento del hijo se aplica sin
+   intervención manual. No se necesitó construir un ordenamiento
+   topológico explícito: el mecanismo de reintentos con backoff que ya
+   existía (§4) es suficiente para autocorregir el caso raro de empate.
+
+### 9.8 Operaciones atómicas locales y en servidor
+
+Toda creación compuesta (lote+siembra en Fase 2; alimento+stock
+inicial y alimentación+consumo en Fase 3) se escribe **en una sola
+transacción Dexie** que incluye tanto los registros de dominio como
+sus entradas de `syncQueue` — nunca dos llamadas independientes a
+`createRecord`. Esto garantiza que, si el navegador se cierra a mitad
+de camino, nunca queda un `FeedingRecord` sin su
+`FeedInventoryMovement` (o viceversa) en el dispositivo.
+
+En el servidor, cada operación de la transacción compuesta sigue
+siendo una fila independiente de `SyncOperation` (con su propio
+`operationId`), pero cada una se aplica dentro de su propia transacción
+Prisma — no hay una única transacción de servidor que abarque las dos
+operaciones. Esto es intencional y no compromete la consistencia: la
+validación de negocio que importa (que el `FeedInventoryMovement`
+CONSUMPTION no deje el stock negativo) ya ocurre dentro de la
+transacción de *esa* operación, con su propio advisory lock — no
+depende de que el `FeedingRecord` se haya aplicado antes o después. Si
+el `FeedingRecord` llega y el `FeedInventoryMovement` falla (o
+viceversa), cada uno queda en el estado que le corresponde
+(`"applied"`/`"error"`/`"conflict"`) y el reintento del outbox termina
+de converger — nunca queda "medio aplicada" una operación compuesta de
+forma que el ledger de alimento quede inconsistente, porque el ledger
+solo se construye a partir de los `FeedInventoryMovement`
+efectivamente aplicados, nunca de los `FeedingRecord`.
