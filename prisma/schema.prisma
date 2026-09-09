@@ -2,9 +2,11 @@
 //
 // Fase 1 (base técnica y offline/sync): Species, Pond, SyncOperation.
 // Fase 2 (producción piscícola): FishBatch, Stocking, FishTransfer, y
-// campos nuevos en Species/Pond. El resto del modelo de datos completo
-// del dominio piscícola está documentado en IMPLEMENTATION_PLAN.md §4 y
-// se implementará de forma incremental en las siguientes fases.
+// campos nuevos en Species/Pond. Fase 3 (operación diaria): Feed,
+// FeedInventoryMovement, FeedingRecord, MortalityRecord, Sampling. El
+// resto del modelo de datos completo del dominio piscícola está
+// documentado en IMPLEMENTATION_PLAN.md §4 y se implementará de forma
+// incremental en las siguientes fases.
 
 // Prisma 7 requiere el generador "prisma-client" (ESM/CJS configurable) con
 // una ruta de salida explícita, y ya no acepta la URL de conexión dentro de
@@ -46,6 +48,41 @@ enum BatchStatus {
   PARTIAL_HARVEST
   HARVESTED
   CLOSED
+}
+
+/// Tipo de movimiento de inventario de alimento (§4-§5 del encargo de
+/// Fase 3). El signo NUNCA se guarda: se deriva del tipo en
+/// src/lib/domain/feedLedger.ts (getFeedMovementSignedQuantity), la única
+/// fuente de esa regla.
+enum FeedMovementType {
+  PURCHASE
+  INITIAL_STOCK
+  CONSUMPTION
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+  LOSS
+  RETURN
+}
+
+/// Turno de alimentación (§8). La UI muestra "Mañana/Mediodía/Tarde/Noche".
+enum FeedingShift {
+  MORNING
+  MIDDAY
+  AFTERNOON
+  NIGHT
+}
+
+/// Causa de mortalidad (§15). La UI muestra los textos en español.
+enum MortalityCause {
+  UNKNOWN
+  LOW_OXYGEN
+  DISEASE
+  HANDLING
+  PREDATORS
+  TEMPERATURE
+  WATER_QUALITY
+  ACCIDENT
+  OTHER
 }
 
 enum SyncOperationType {
@@ -124,9 +161,12 @@ model Pond {
   createdBy String?
   updatedBy String?
 
-  stockings     Stocking[]
-  transfersFrom FishTransfer[] @relation("TransferFromPond")
-  transfersTo   FishTransfer[] @relation("TransferToPond")
+  stockings        Stocking[]
+  transfersFrom    FishTransfer[]    @relation("TransferFromPond")
+  transfersTo      FishTransfer[]    @relation("TransferToPond")
+  feedingRecords   FeedingRecord[]
+  mortalityRecords MortalityRecord[]
+  samplings        Sampling[]
 
   @@index([status])
   @@index([active])
@@ -163,8 +203,11 @@ model FishBatch {
   createdBy String?
   updatedBy String?
 
-  stockings Stocking[]
-  transfers FishTransfer[]
+  stockings        Stocking[]
+  transfers        FishTransfer[]
+  feedingRecords   FeedingRecord[]
+  mortalityRecords MortalityRecord[]
+  samplings        Sampling[]
 
   @@index([speciesId])
   @@index([status])
@@ -224,6 +267,155 @@ model FishTransfer {
   @@index([fromPondId])
   @@index([toPondId])
   @@map("fish_transfers")
+}
+
+/// Catálogo configurable de alimentos (§3 del encargo de Fase 3). No se
+/// codifican alimentos fijos, igual criterio que Species.
+model Feed {
+  id               String   @id @default(uuid())
+  name             String
+  brand            String?
+  proteinPercent   Decimal? @db.Decimal(5, 2)
+  pelletSizeMm     Decimal? @db.Decimal(6, 2)
+  bagWeightKg      Decimal? @db.Decimal(8, 2)
+  defaultBagPrice  Decimal? @db.Decimal(12, 2)
+  defaultCostPerKg Decimal? @db.Decimal(12, 4)
+  recommendedStage String?
+  notes            String?
+  minimumStockKg   Decimal? @db.Decimal(10, 2)
+  active           Boolean  @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  version   Int       @default(1)
+  deviceId  String
+  createdBy String?
+  updatedBy String?
+
+  inventoryMovements FeedInventoryMovement[]
+  feedingRecords     FeedingRecord[]
+
+  @@index([active])
+  @@map("feeds")
+}
+
+/// Ledger de inventario de alimento (§4-§7): evento append-only. El stock
+/// de un alimento NUNCA es un campo mutable — se deriva siempre de estos
+/// movimientos (src/lib/domain/feedLedger.ts). `quantityKg` siempre se
+/// guarda positivo; el signo lo decide `movementType`.
+model FeedInventoryMovement {
+  id            String           @id @default(uuid())
+  feedId        String
+  feed          Feed             @relation(fields: [feedId], references: [id])
+  movementType  FeedMovementType
+  quantityKg    Decimal          @db.Decimal(10, 3)
+  unitCostPerKg Decimal?         @db.Decimal(12, 4)
+  totalCost     Decimal?         @db.Decimal(12, 2)
+  date          DateTime
+  /// Origen del movimiento cuando no es manual — p. ej. "FEEDING" cuando
+  /// lo generó un FeedingRecord (§9). `sourceType`+`sourceId` identifican
+  /// unívocamente ese origen: la restricción única de abajo es la que
+  /// garantiza que un mismo FeedingRecord nunca descuente alimento dos
+  /// veces, incluso si el push que lo generó se reintenta.
+  sourceType    String?
+  sourceId      String?
+  notes         String?
+
+  deviceId  String
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@unique([sourceType, sourceId])
+  @@index([feedId])
+  @@index([feedId, date])
+  @@index([movementType])
+  @@map("feed_inventory_movements")
+}
+
+/// Registro diario de alimentación (§8-§9): evento append-only. Cada
+/// registro genera exactamente un FeedInventoryMovement CONSUMPTION
+/// vinculado (sourceType="FEEDING", sourceId=este id).
+model FeedingRecord {
+  id              String        @id @default(uuid())
+  batchId         String
+  batch           FishBatch     @relation(fields: [batchId], references: [id])
+  pondId          String
+  pond            Pond          @relation(fields: [pondId], references: [id])
+  feedId          String
+  feed            Feed          @relation(fields: [feedId], references: [id])
+  date            DateTime
+  time            String?
+  quantityKg      Decimal       @db.Decimal(10, 3)
+  shift           FeedingShift?
+  responsibleName String?
+  notes           String?
+
+  deviceId  String
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([batchId])
+  @@index([pondId])
+  @@index([feedId])
+  @@index([date])
+  @@map("feeding_records")
+}
+
+/// Mortalidad (§15-§19): evento append-only, integrado en el ledger de
+/// peces como una salida más (src/lib/domain/batchLedger.ts).
+model MortalityRecord {
+  id                      String         @id @default(uuid())
+  batchId                 String
+  batch                   FishBatch      @relation(fields: [batchId], references: [id])
+  pondId                  String
+  pond                    Pond           @relation(fields: [pondId], references: [id])
+  date                    DateTime
+  quantity                Int
+  estimatedAverageWeightG Decimal?       @db.Decimal(10, 2)
+  cause                   MortalityCause @default(UNKNOWN)
+  notes                   String?
+  responsibleName         String?
+
+  deviceId  String
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([batchId])
+  @@index([pondId])
+  @@index([batchId, pondId])
+  @@index([date])
+  @@map("mortality_records")
+}
+
+/// Muestreo (§21-§24): evento append-only. `averageWeightG` se calcula a
+/// partir de `sampleFishCount`/`totalSampleWeightKg` antes de guardar
+/// (nunca se le pide a la persona que lo calcule) y queda almacenado
+/// junto a sus propios insumos — no es un valor mutable global, es el
+/// resultado intrínseco de este muestreo puntual.
+model Sampling {
+  id                  String    @id @default(uuid())
+  batchId             String
+  batch               FishBatch @relation(fields: [batchId], references: [id])
+  pondId              String
+  pond                Pond      @relation(fields: [pondId], references: [id])
+  date                DateTime
+  sampleFishCount     Int
+  totalSampleWeightKg Decimal   @db.Decimal(10, 3)
+  averageWeightG      Decimal   @db.Decimal(10, 2)
+  averageLengthCm     Decimal?  @db.Decimal(6, 2)
+  notes               String?
+  responsibleName     String?
+
+  deviceId  String
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([batchId])
+  @@index([pondId])
+  @@index([batchId, pondId])
+  @@index([date])
+  @@map("samplings")
 }
 
 /// Registro de operaciones de sincronización procesadas por el servidor.
