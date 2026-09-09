@@ -71,13 +71,40 @@ flowchart LR
 
 | Capa | Tecnología | Justificación |
 |---|---|---|
-| Framework | Next.js 14+ (App Router, TypeScript) | SSR opcional para landing/login, pero la app autenticada corre como SPA/PWA client-heavy |
-| UI | React 18 + Tailwind CSS + componentes accesibles (Radix UI primitives) | Rápido de estilizar, accesible, buen soporte táctil móvil |
+| Framework | Next.js (App Router, TypeScript) | SSR opcional para landing/login, pero la app autenticada corre como SPA/PWA client-heavy |
+| UI | React + Tailwind CSS + componentes accesibles (Radix UI primitives) | Rápido de estilizar, accesible, buen soporte táctil móvil |
 | Estado / datos locales | Dexie.js sobre IndexedDB | API madura, transacciones, hooks reactivos (`dexie-react-hooks` → `useLiveQuery`) |
 | Validación | Zod (esquemas compartidos cliente/servidor) | Una sola fuente de verdad para reglas de negocio (§52) |
 | Base de datos servidor | PostgreSQL (Railway) | Relacional, transaccional, soporta Railway nativo |
 | ORM servidor | Prisma | Migraciones versionadas, tipado end-to-end |
-| PWA | `next-pwa`/Workbox o service worker manual | Cache de app shell, estrategia offline |
+| PWA | `@serwist/next` (Workbox-based, mantenido activamente para App Router) | Cache de app shell, estrategia offline documentada |
+
+### 3.3 Matriz de versiones (verificada antes de instalar)
+
+Antes de tocar `package.json` se consultaron los dist-tags reales de npm (`npm view <paquete> dist-tags`) el 09/09/2026, para no partir de una versión desactualizada ni de una beta/RC/canary sin justificar. Resultado:
+
+| Paquete | Versión seleccionada | Dist-tag npm | Motivo |
+|---|---|---|---|
+| `next` | **16.3.4** | `latest` (Active LTS) | Última estable de Next 16; `beta`/`canary`/`preview` descartados por ser pre-release |
+| `react` / `react-dom` | **19.2.8** | `latest` | Requerido por Next 16 (`peerDependencies: ^19.0.0`); versión estable, no `rc`/`canary` |
+| `typescript` | **7.0.2** | `latest` | Última estable (compilador nativo "tsc-go"). Compatible con Next 16 y `eslint-config-next` (`peerDependencies.typescript: >=3.3.1`) y con Prisma 7 (sin restricción de TS). **Riesgo documentado**: es una reescritura mayor reciente del compilador; si durante la Fase 1 aparecen incompatibilidades reales de tooling se hará fallback documentado a `5.9.3` (última de la línea JS clásica, también estable) |
+| `@types/react` / `@types/react-dom` | **19.2.18 / 19.2.7** | `latest` | Alineadas a React 19.2.x |
+| `@types/node` | **^22.20.1** | rama `22.x` | Alineada a la versión de Node del entorno de ejecución (`v22.22.2`), no a la `latest` (26.x), para evitar tipos de APIs de una major de Node que no se está usando |
+| `tailwindcss` + `@tailwindcss/postcss` | **4.3.3** | `latest` | Tailwind v4 estable (CSS-first config); se descarta `next` (4.0.0 preview tag) |
+| `prisma` (CLI) y `@prisma/client` | **7.10.0** | `prev` en `prisma`, `latest` en `@prisma/client` | **Importante**: el dist-tag `latest` del paquete `prisma` apunta hoy a `8.0.0-rc.13` (release candidate, sin versión `8.0.0` estable publicada — confirmado listando el historial de versiones, la serie 8.x solo tiene sufijos `-rc.*`/`-dev.*`). Por la regla "evitar RC salvo necesidad técnica", se fija Prisma en **7.10.0**, la última versión totalmente estable, compatible con PostgreSQL y con Node `^20.19 \|\| ^22.12 \|\| >=24.0` (Node 22.22.2 cumple). Se reevaluará Prisma 8 cuando publique una versión estable no-RC |
+| `dexie` | **4.4.5** | `latest` | Estable |
+| `dexie-react-hooks` | **4.4.0** | `latest` | Estable, para `useLiveQuery` |
+| `zod` | **4.5.4** | `latest` | Estable (v4); se descartan `beta`/`canary` |
+| `@serwist/next` / `serwist` | **9.5.12** | `latest` | Sucesor mantenido de `next-pwa` (este último, en 5.6.0, lleva años sin actividad relevante); soporta Next `>=14.0.0` y TypeScript `>=5.0.0` |
+| `eslint` | **10.10.0** | `latest` | Estable; se descarta `next` (10.0.0-rc.2) |
+| `eslint-config-next` | **16.3.4** | `latest` | Debe ir alineado a la versión exacta de `next` |
+| `vitest` | **5.0.0** | `latest` | Estable; requiere Node `^22.12 \|\| ^24 \|\| >=26` (cumplido) |
+| `@playwright/test` | **1.63.0** | `latest` | Estable; el entorno de ejecución ya trae Chromium preinstalado (revisión `1194`), por lo que los tests E2E se lanzan con `executablePath` explícito en vez de descargar navegadores |
+| `next-auth` | *(no se instala en Fase 1)* | — | Documentado para fases futuras: última estable v4 es `4.24.15`; v5 sigue en `beta` (`5.0.0-beta.32`) y se evitará mientras no sea estable |
+
+**PostgreSQL**: se usa **16.x** como referencia (el entorno de desarrollo trae `postgresql-16` instalado de forma nativa, y es la versión típica de las plantillas gestionadas de Railway). Prisma 7.10.0 soporta también PostgreSQL 15 y 17, por lo que la aplicación no queda anclada a una minor exacta: cualquier PostgreSQL ≥ 14 soportado por Railway es válido.
+
+**Regla de actualización futura**: cualquier cambio de versión mayor sobre esta matriz (en particular saltar a Prisma 8 o a una nueva major de Next/React) debe repetir este mismo proceso de verificación (`npm view <pkg> dist-tags`) y quedar documentado aquí antes de aplicarse.
 | Autenticación | NextAuth (Credentials) + sesión local persistida | Login inicial online, uso posterior offline (§48) |
 | Gráficos | Recharts (simple, liviano en móvil) | Suficiente para dashboards de campo |
 | Testing | Vitest (unidad/cálculos), Playwright (E2E, incluye modo offline) | Playwright soporta `context.setOffline()` |
@@ -359,7 +386,7 @@ Más: "Última sincronización: dd/mm/aaaa hh:mm" y botón "Sincronizar ahora". 
 ## 7. PWA
 
 - `manifest.webmanifest`: nombre, iconos (192/512, maskable), `display: standalone`, `theme_color`, `start_url`.
-- Service worker (Workbox vía `next-pwa` o configuración manual con `serwist`): cachea el app shell (JS/CSS/rutas principales) con estrategia `StaleWhileRevalidate` para assets estáticos y `NetworkFirst` con fallback a caché para rutas de navegación.
+- Service worker vía `@serwist/next` (Workbox por debajo, mantenido para App Router de Next 14+): cachea el app shell (JS/CSS/rutas principales) con estrategia `StaleWhileRevalidate` para assets estáticos y `NetworkFirst` con fallback a caché para rutas de navegación.
 - No existe una "pantalla offline" bloqueante: si falta un recurso no crítico, se degrada; los datos siempre vienen de IndexedDB, nunca de un fetch a la API para renderizar.
 - Prompt discreto de instalación ("Instalar aplicación") usando el evento `beforeinstallprompt`, sin forzar.
 - Estrategia de actualización de versión: `skipWaiting` + aviso "Nueva versión disponible, recargar" controlado por el usuario (para no interrumpir un registro en curso).
