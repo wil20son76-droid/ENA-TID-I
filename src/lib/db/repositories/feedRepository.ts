@@ -6,7 +6,7 @@ import { generateId } from "../uuid";
 import { enqueueSyncOperation, softDeleteRecord, updateRecord } from "./base";
 
 const ENTITY_TYPE = "Feed" as const;
-const MOVEMENT_ENTITY_TYPE = "FeedInventoryMovement" as const;
+const CREATE_WITH_STOCK_ENTITY_TYPE = "CreateFeedWithInitialStock" as const;
 
 /** Alimentos activos (no eliminados), ordenados por nombre. */
 export async function listActiveFeeds(): Promise<FeedRecord[]> {
@@ -37,9 +37,13 @@ export interface CreateFeedInput {
 
 /**
  * Crea un alimento y, si se indica, su movimiento de stock inicial, en
- * una única transacción local (§7 del encargo de Fase 3 — mismo patrón
- * que createFishBatchWithStocking en Fase 2): nunca un stock mutable
- * escrito directamente, siempre a través de un movimiento del ledger.
+ * una única transacción local. Desde la Fase 3.5 (§9 del encargo), con
+ * stock inicial se encola UNA sola operación de negocio
+ * (`CreateFeedWithInitialStock`) en vez de dos independientes — mismo
+ * criterio que `createFeedingWithConsumption`: el servidor no debe poder
+ * terminar con el Feed creado pero el stock inicial perdido. Sin stock
+ * inicial (0 o no informado), sigue siendo un `Feed` CREATE simple — no
+ * hay nada compuesto que proteger.
  */
 export async function createFeed(input: CreateFeedInput): Promise<FeedRecord> {
   const deviceId = getDeviceId();
@@ -68,23 +72,56 @@ export async function createFeed(input: CreateFeedInput): Promise<FeedRecord> {
   };
 
   const hasInitialStock = input.initialStockKg != null && input.initialStockKg > 0;
-  const movement = hasInitialStock
-    ? {
-        id: generateId(),
-        feedId: feed.id,
-        movementType: "INITIAL_STOCK" as const,
-        quantityKg: input.initialStockKg as number,
-        unitCostPerKg: null,
-        totalCost: null,
-        date: now,
-        sourceType: null,
-        sourceId: null,
-        notes: null,
-        deviceId,
-        createdAt: now,
-        deletedAt: null,
-      }
-    : null;
+
+  if (!hasInitialStock) {
+    await db.transaction("rw", db.feeds, db.syncQueue, async () => {
+      await db.feeds.add(feed);
+      await enqueueSyncOperation(ENTITY_TYPE, feed.id, "CREATE", feed, deviceId);
+    });
+    return feed;
+  }
+
+  const movementId = generateId();
+  const movement = {
+    id: movementId,
+    feedId: feed.id,
+    movementType: "INITIAL_STOCK" as const,
+    quantityKg: input.initialStockKg as number,
+    unitCostPerKg: null,
+    totalCost: null,
+    date: now,
+    sourceType: null,
+    sourceId: null,
+    notes: null,
+    deviceId,
+    createdAt: now,
+    deletedAt: null,
+  };
+
+  const createWithStockPayload = {
+    id: feed.id,
+    name: feed.name,
+    brand: feed.brand,
+    proteinPercent: feed.proteinPercent,
+    pelletSizeMm: feed.pelletSizeMm,
+    bagWeightKg: feed.bagWeightKg,
+    defaultBagPrice: feed.defaultBagPrice,
+    defaultCostPerKg: feed.defaultCostPerKg,
+    recommendedStage: feed.recommendedStage,
+    notes: feed.notes,
+    minimumStockKg: feed.minimumStockKg,
+    active: feed.active,
+    createdAt: feed.createdAt,
+    updatedAt: feed.updatedAt,
+    deletedAt: feed.deletedAt,
+    version: feed.version,
+    deviceId: feed.deviceId,
+    createdBy: feed.createdBy,
+    updatedBy: feed.updatedBy,
+    initialStockMovementId: movementId,
+    initialStockKg: input.initialStockKg as number,
+    initialStockDate: now,
+  };
 
   await db.transaction(
     "rw",
@@ -93,12 +130,14 @@ export async function createFeed(input: CreateFeedInput): Promise<FeedRecord> {
     db.syncQueue,
     async () => {
       await db.feeds.add(feed);
-      await enqueueSyncOperation(ENTITY_TYPE, feed.id, "CREATE", feed, deviceId);
-
-      if (movement) {
-        await db.feedInventoryMovements.add(movement);
-        await enqueueSyncOperation(MOVEMENT_ENTITY_TYPE, movement.id, "CREATE", movement, deviceId);
-      }
+      await db.feedInventoryMovements.add(movement);
+      await enqueueSyncOperation(
+        CREATE_WITH_STOCK_ENTITY_TYPE,
+        feed.id,
+        "CREATE",
+        createWithStockPayload,
+        deviceId,
+      );
     },
   );
 

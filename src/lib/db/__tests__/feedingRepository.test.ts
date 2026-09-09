@@ -59,7 +59,7 @@ describe("feedingRepository.createFeedingWithConsumption", () => {
     expect(await getFeedStockKg(feedId)).toBe(460);
   });
 
-  it("crea FeedingRecord + FeedInventoryMovement CONSUMPTION vinculado en una transacción", async () => {
+  it("crea FeedingRecord + FeedInventoryMovement CONSUMPTION vinculado en una transacción, como un único comando de negocio (Fase 3.5 §2/§5)", async () => {
     const { feeding, movementId } = await createFeedingWithConsumption({
       batchId,
       pondId,
@@ -74,12 +74,15 @@ describe("feedingRepository.createFeedingWithConsumption", () => {
     expect(movement?.sourceType).toBe("FEEDING");
     expect(movement?.sourceId).toBe(feeding.id);
 
+    // Ambas entidades quedan escritas localmente (para que la UI offline
+    // funcione sin cambios), pero se encola UN solo comando de negocio
+    // (RegisterFeeding) — nunca dos operaciones independientes.
     const queue = await db.syncQueue.toArray();
-    expect(queue).toHaveLength(2);
-    expect(queue.map((q) => q.entityType).sort()).toEqual([
-      "FeedInventoryMovement",
-      "FeedingRecord",
-    ]);
+    expect(queue).toHaveLength(1);
+    expect(queue[0].entityType).toBe("RegisterFeeding");
+    expect(queue[0].entityId).toBe(feeding.id);
+    const payload = queue[0].payload as { movementId: string };
+    expect(payload.movementId).toBe(movementId);
   });
 
   it("stock 20kg, intento 25kg -> falla y no crea nada (§48)", async () => {

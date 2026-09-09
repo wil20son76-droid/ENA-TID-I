@@ -5,10 +5,9 @@ import type { FeedingRecordFields, FeedingRecordRecord } from "../types";
 import { generateId } from "../uuid";
 import { enqueueSyncOperation } from "./base";
 
-const FEEDING_ENTITY_TYPE = "FeedingRecord" as const;
-const MOVEMENT_ENTITY_TYPE = "FeedInventoryMovement" as const;
+const REGISTER_FEEDING_ENTITY_TYPE = "RegisterFeeding" as const;
 
-/** Fuente de un movimiento de inventario generado por un registro de alimentación (§9). */
+/** Fuente de un movimiento de inventario generado por un registro de alimentación (§9 de Fase 3). */
 const FEEDING_SOURCE_TYPE = "FEEDING";
 
 export interface CreateFeedingInput {
@@ -25,11 +24,25 @@ export interface CreateFeedingInput {
 
 /**
  * Registra una alimentación: FeedingRecord + FeedInventoryMovement
- * CONSUMPTION vinculado, en una única transacción local (§9 del encargo
- * de Fase 3 — mismo patrón que createFishBatchWithStocking). Valida el
- * stock disponible ANTES de escribir (§10); el servidor vuelve a
- * validarlo al sincronizar, igual que con los traslados de peces
- * (§59: nunca confiar solo en el cliente).
+ * CONSUMPTION vinculado, en una única transacción local — y, desde la
+ * Fase 3.5, encolados como UNA sola operación de sync
+ * (`RegisterFeeding`), no dos independientes (§2/§5 del encargo de
+ * Fase 3.5). "Registrar alimentación" es una sola acción de negocio: el
+ * servidor debe terminar con las dos escrituras aplicadas o con
+ * ninguna, nunca con una sin la otra — ver
+ * `src/app/api/sync/_lib/applyOperation.ts` (applyRegisterFeedingOperation)
+ * y `OFFLINE_SYNC.md` §10.
+ *
+ * Localmente se siguen escribiendo AMBAS tablas (`feedingRecords` y
+ * `feedInventoryMovements`) para que la UI offline (stock, historial,
+ * dashboard) siga leyendo de sus tablas normales sin cambios — el
+ * payload de sync trae todo lo necesario para que el servidor recree
+ * las dos escrituras de forma idempotente a partir de una sola entrada
+ * de outbox.
+ *
+ * Valida el stock disponible ANTES de escribir (§10 de Fase 3); el
+ * servidor vuelve a validarlo al sincronizar, igual que con los
+ * traslados de peces (§59: nunca confiar solo en el cliente).
  */
 export async function createFeedingWithConsumption(
   input: CreateFeedingInput,
@@ -48,9 +61,11 @@ export async function createFeedingWithConsumption(
 
   const deviceId = getDeviceId();
   const now = new Date().toISOString();
+  const feedingId = generateId();
+  const movementId = generateId();
 
   const feeding: FeedingRecordRecord = {
-    id: generateId(),
+    id: feedingId,
     batchId: input.batchId,
     pondId: input.pondId,
     feedId: input.feedId,
@@ -65,7 +80,6 @@ export async function createFeedingWithConsumption(
     deletedAt: null,
   };
 
-  const movementId = generateId();
   const movement = {
     id: movementId,
     feedId: input.feedId,
@@ -82,6 +96,26 @@ export async function createFeedingWithConsumption(
     deletedAt: null,
   };
 
+  // Payload del comando de negocio: trae todos los campos que el
+  // servidor necesita para recrear FeedingRecord + FeedInventoryMovement
+  // dentro de su única transacción (ver applyRegisterFeedingOperation).
+  const registerFeedingPayload = {
+    id: feeding.id,
+    movementId,
+    batchId: feeding.batchId,
+    pondId: feeding.pondId,
+    feedId: feeding.feedId,
+    date: feeding.date,
+    time: feeding.time,
+    quantityKg: feeding.quantityKg,
+    shift: feeding.shift,
+    responsibleName: feeding.responsibleName,
+    notes: feeding.notes,
+    deviceId: feeding.deviceId,
+    createdAt: feeding.createdAt,
+    deletedAt: feeding.deletedAt,
+  };
+
   await db.transaction(
     "rw",
     db.feedingRecords,
@@ -90,12 +124,11 @@ export async function createFeedingWithConsumption(
     async () => {
       await db.feedingRecords.add(feeding);
       await db.feedInventoryMovements.add(movement);
-      await enqueueSyncOperation(FEEDING_ENTITY_TYPE, feeding.id, "CREATE", feeding, deviceId);
       await enqueueSyncOperation(
-        MOVEMENT_ENTITY_TYPE,
-        movement.id,
+        REGISTER_FEEDING_ENTITY_TYPE,
+        feeding.id,
         "CREATE",
-        movement,
+        registerFeedingPayload,
         deviceId,
       );
     },

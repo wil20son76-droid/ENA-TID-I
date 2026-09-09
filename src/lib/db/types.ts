@@ -281,7 +281,10 @@ export type SyncEntityType =
   | "FeedInventoryMovement"
   | "FeedingRecord"
   | "MortalityRecord"
-  | "Sampling";
+  | "Sampling"
+  // Comandos de negocio compuestos (Fase 3.5) — ver src/lib/validation/sync.ts.
+  | "RegisterFeeding"
+  | "CreateFeedWithInitialStock";
 
 export type SyncOperationType = "CREATE" | "UPDATE" | "DELETE";
 

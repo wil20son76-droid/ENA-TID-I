@@ -19,7 +19,7 @@ describe("feedRepository.createFeed", () => {
     expect(queue[0].entityType).toBe("Feed");
   });
 
-  it("crea el alimento y su stock inicial juntos, en una transacción (§7)", async () => {
+  it("crea el alimento y su stock inicial juntos, en una transacción, como un único comando de negocio (§7, Fase 3.5 §9)", async () => {
     const feed = await createFeed({ name: "Crecimiento 32%", initialStockKg: 500 });
 
     expect(await getFeedStockKg(feed.id)).toBe(500);
@@ -29,9 +29,12 @@ describe("feedRepository.createFeed", () => {
     expect(movements[0].movementType).toBe("INITIAL_STOCK");
     expect(movements[0].quantityKg).toBe(500);
 
+    // Con stock inicial, se encola UN solo comando de negocio
+    // (CreateFeedWithInitialStock), no dos operaciones independientes —
+    // así el servidor nunca puede aplicar el Feed sin su stock inicial.
     const queue = await db.syncQueue.toArray();
-    expect(queue).toHaveLength(2);
-    expect(queue.map((q) => q.entityType).sort()).toEqual(["Feed", "FeedInventoryMovement"]);
+    expect(queue).toHaveLength(1);
+    expect(queue[0].entityType).toBe("CreateFeedWithInitialStock");
   });
 
   it("stock inicial de 0 o no indicado no crea ningún movimiento", async () => {
