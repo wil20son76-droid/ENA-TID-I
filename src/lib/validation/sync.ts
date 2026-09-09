@@ -11,6 +11,11 @@ export const syncEntityTypeSchema = z.enum([
   "FishBatch",
   "Stocking",
   "FishTransfer",
+  "Feed",
+  "FeedInventoryMovement",
+  "FeedingRecord",
+  "MortalityRecord",
+  "Sampling",
 ]);
 export const pondStatusSchema = z.enum([
   "EMPTY",
@@ -29,6 +34,27 @@ export const batchStatusSchema = z.enum([
   "PARTIAL_HARVEST",
   "HARVESTED",
   "CLOSED",
+]);
+export const feedMovementTypeSchema = z.enum([
+  "PURCHASE",
+  "INITIAL_STOCK",
+  "CONSUMPTION",
+  "ADJUSTMENT_IN",
+  "ADJUSTMENT_OUT",
+  "LOSS",
+  "RETURN",
+]);
+export const feedingShiftSchema = z.enum(["MORNING", "MIDDAY", "AFTERNOON", "NIGHT"]);
+export const mortalityCauseSchema = z.enum([
+  "UNKNOWN",
+  "LOW_OXYGEN",
+  "DISEASE",
+  "HANDLING",
+  "PREDATORS",
+  "TEMPERATURE",
+  "WATER_QUALITY",
+  "ACCIDENT",
+  "OTHER",
 ]);
 
 // Campos de auditoría completos: entidades mutables (Species, Pond,
@@ -136,11 +162,98 @@ export const fishTransferPayloadSchema = z.object({
   deletedAt: z.iso.datetime().nullable(),
 });
 
+// Fase 3: catálogo de alimentos (mutable, igual criterio que Species/Pond).
+export const feedPayloadSchema = z.object({
+  id: z.uuid(),
+  name: z.string().min(1).max(200),
+  brand: z.string().max(200).nullable(),
+  proteinPercent: z.number().min(0).max(100).nullable(),
+  pelletSizeMm: z.number().nonnegative().nullable(),
+  bagWeightKg: z.number().nonnegative().nullable(),
+  defaultBagPrice: z.number().nonnegative().nullable(),
+  defaultCostPerKg: z.number().nonnegative().nullable(),
+  recommendedStage: z.string().max(200).nullable(),
+  notes: z.string().max(2000).nullable(),
+  minimumStockKg: z.number().nonnegative().nullable(),
+  active: z.boolean(),
+  ...auditFieldsSchema,
+});
+
+// Fase 3: eventos append-only (§4, §8, §15, §21) — mismo criterio que
+// Stocking/FishTransfer: sin version/createdBy/updatedBy.
+export const feedInventoryMovementPayloadSchema = z.object({
+  id: z.uuid(),
+  feedId: z.uuid(),
+  movementType: feedMovementTypeSchema,
+  quantityKg: z.number().positive(),
+  unitCostPerKg: z.number().nonnegative().nullable(),
+  totalCost: z.number().nonnegative().nullable(),
+  date: z.iso.datetime(),
+  sourceType: z.string().max(50).nullable(),
+  sourceId: z.uuid().nullable(),
+  notes: z.string().max(2000).nullable(),
+  deviceId: z.string().min(1).max(200),
+  createdAt: z.iso.datetime(),
+  deletedAt: z.iso.datetime().nullable(),
+});
+
+export const feedingRecordPayloadSchema = z.object({
+  id: z.uuid(),
+  batchId: z.uuid(),
+  pondId: z.uuid(),
+  feedId: z.uuid(),
+  date: z.iso.datetime(),
+  time: z.string().max(10).nullable(),
+  quantityKg: z.number().positive(),
+  shift: feedingShiftSchema.nullable(),
+  responsibleName: z.string().max(200).nullable(),
+  notes: z.string().max(2000).nullable(),
+  deviceId: z.string().min(1).max(200),
+  createdAt: z.iso.datetime(),
+  deletedAt: z.iso.datetime().nullable(),
+});
+
+export const mortalityRecordPayloadSchema = z.object({
+  id: z.uuid(),
+  batchId: z.uuid(),
+  pondId: z.uuid(),
+  date: z.iso.datetime(),
+  quantity: z.number().int().positive(),
+  estimatedAverageWeightG: z.number().positive().nullable(),
+  cause: mortalityCauseSchema,
+  notes: z.string().max(2000).nullable(),
+  responsibleName: z.string().max(200).nullable(),
+  deviceId: z.string().min(1).max(200),
+  createdAt: z.iso.datetime(),
+  deletedAt: z.iso.datetime().nullable(),
+});
+
+export const samplingPayloadSchema = z.object({
+  id: z.uuid(),
+  batchId: z.uuid(),
+  pondId: z.uuid(),
+  date: z.iso.datetime(),
+  sampleFishCount: z.number().int().positive(),
+  totalSampleWeightKg: z.number().positive(),
+  averageWeightG: z.number().positive(),
+  averageLengthCm: z.number().positive().nullable(),
+  notes: z.string().max(2000).nullable(),
+  responsibleName: z.string().max(200).nullable(),
+  deviceId: z.string().min(1).max(200),
+  createdAt: z.iso.datetime(),
+  deletedAt: z.iso.datetime().nullable(),
+});
+
 export type SpeciesPayload = z.infer<typeof speciesPayloadSchema>;
 export type PondPayload = z.infer<typeof pondPayloadSchema>;
 export type FishBatchPayload = z.infer<typeof fishBatchPayloadSchema>;
 export type StockingPayload = z.infer<typeof stockingPayloadSchema>;
 export type FishTransferPayload = z.infer<typeof fishTransferPayloadSchema>;
+export type FeedPayload = z.infer<typeof feedPayloadSchema>;
+export type FeedInventoryMovementPayload = z.infer<typeof feedInventoryMovementPayloadSchema>;
+export type FeedingRecordPayload = z.infer<typeof feedingRecordPayloadSchema>;
+export type MortalityRecordPayload = z.infer<typeof mortalityRecordPayloadSchema>;
+export type SamplingPayload = z.infer<typeof samplingPayloadSchema>;
 
 const basePushOperationSchema = z.object({
   // Id de la propia operación de sincronización — es la clave de
@@ -171,6 +284,26 @@ export const pushOperationSchema = z.discriminatedUnion("entityType", [
   basePushOperationSchema.extend({
     entityType: z.literal("FishTransfer"),
     payload: fishTransferPayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("Feed"),
+    payload: feedPayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("FeedInventoryMovement"),
+    payload: feedInventoryMovementPayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("FeedingRecord"),
+    payload: feedingRecordPayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("MortalityRecord"),
+    payload: mortalityRecordPayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("Sampling"),
+    payload: samplingPayloadSchema,
   }),
 ]);
 

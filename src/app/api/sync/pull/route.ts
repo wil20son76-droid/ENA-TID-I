@@ -14,9 +14,14 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/server/prisma";
 import { pullQuerySchema } from "@/lib/validation/sync";
 import type {
+  Feed,
+  FeedingRecord,
+  FeedInventoryMovement,
   FishBatch,
   FishTransfer,
+  MortalityRecord,
   Pond,
+  Sampling,
   Species,
   Stocking,
 } from "@/generated/prisma/client";
@@ -143,6 +148,101 @@ function serializeFishTransfer(transfer: FishTransfer) {
   };
 }
 
+function serializeFeed(feed: Feed) {
+  return {
+    id: feed.id,
+    name: feed.name,
+    brand: feed.brand,
+    proteinPercent: toNullableNumber(feed.proteinPercent),
+    pelletSizeMm: toNullableNumber(feed.pelletSizeMm),
+    bagWeightKg: toNullableNumber(feed.bagWeightKg),
+    defaultBagPrice: toNullableNumber(feed.defaultBagPrice),
+    defaultCostPerKg: toNullableNumber(feed.defaultCostPerKg),
+    recommendedStage: feed.recommendedStage,
+    notes: feed.notes,
+    minimumStockKg: toNullableNumber(feed.minimumStockKg),
+    active: feed.active,
+    createdAt: feed.createdAt.toISOString(),
+    updatedAt: feed.updatedAt.toISOString(),
+    deletedAt: feed.deletedAt ? feed.deletedAt.toISOString() : null,
+    version: feed.version,
+    deviceId: feed.deviceId,
+    createdBy: feed.createdBy,
+    updatedBy: feed.updatedBy,
+  };
+}
+
+function serializeFeedInventoryMovement(movement: FeedInventoryMovement) {
+  return {
+    id: movement.id,
+    feedId: movement.feedId,
+    movementType: movement.movementType,
+    quantityKg: toNullableNumber(movement.quantityKg) ?? 0,
+    unitCostPerKg: toNullableNumber(movement.unitCostPerKg),
+    totalCost: toNullableNumber(movement.totalCost),
+    date: movement.date.toISOString(),
+    sourceType: movement.sourceType,
+    sourceId: movement.sourceId,
+    notes: movement.notes,
+    deviceId: movement.deviceId,
+    createdAt: movement.createdAt.toISOString(),
+    deletedAt: movement.deletedAt ? movement.deletedAt.toISOString() : null,
+  };
+}
+
+function serializeFeedingRecord(feeding: FeedingRecord) {
+  return {
+    id: feeding.id,
+    batchId: feeding.batchId,
+    pondId: feeding.pondId,
+    feedId: feeding.feedId,
+    date: feeding.date.toISOString(),
+    time: feeding.time,
+    quantityKg: toNullableNumber(feeding.quantityKg) ?? 0,
+    shift: feeding.shift,
+    responsibleName: feeding.responsibleName,
+    notes: feeding.notes,
+    deviceId: feeding.deviceId,
+    createdAt: feeding.createdAt.toISOString(),
+    deletedAt: feeding.deletedAt ? feeding.deletedAt.toISOString() : null,
+  };
+}
+
+function serializeMortalityRecord(mortality: MortalityRecord) {
+  return {
+    id: mortality.id,
+    batchId: mortality.batchId,
+    pondId: mortality.pondId,
+    date: mortality.date.toISOString(),
+    quantity: mortality.quantity,
+    estimatedAverageWeightG: toNullableNumber(mortality.estimatedAverageWeightG),
+    cause: mortality.cause,
+    notes: mortality.notes,
+    responsibleName: mortality.responsibleName,
+    deviceId: mortality.deviceId,
+    createdAt: mortality.createdAt.toISOString(),
+    deletedAt: mortality.deletedAt ? mortality.deletedAt.toISOString() : null,
+  };
+}
+
+function serializeSampling(sampling: Sampling) {
+  return {
+    id: sampling.id,
+    batchId: sampling.batchId,
+    pondId: sampling.pondId,
+    date: sampling.date.toISOString(),
+    sampleFishCount: sampling.sampleFishCount,
+    totalSampleWeightKg: toNullableNumber(sampling.totalSampleWeightKg) ?? 0,
+    averageWeightG: toNullableNumber(sampling.averageWeightG) ?? 0,
+    averageLengthCm: toNullableNumber(sampling.averageLengthCm),
+    notes: sampling.notes,
+    responsibleName: sampling.responsibleName,
+    deviceId: sampling.deviceId,
+    createdAt: sampling.createdAt.toISOString(),
+    deletedAt: sampling.deletedAt ? sampling.deletedAt.toISOString() : null,
+  };
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const parsed = pullQuerySchema.safeParse({
@@ -169,12 +269,30 @@ export async function GET(request: Request) {
   // incremental es createdAt.
   const byCreatedAt = since ? { createdAt: { gt: since } } : {};
 
-  const [species, ponds, fishBatches, stockings, fishTransfers] = await Promise.all([
+  const [
+    species,
+    ponds,
+    fishBatches,
+    stockings,
+    fishTransfers,
+    feeds,
+    feedInventoryMovements,
+    feedingRecords,
+    mortalityRecords,
+    samplings,
+  ] = await Promise.all([
     prisma.species.findMany({ where: byUpdatedAt, orderBy: { updatedAt: "asc" } }),
     prisma.pond.findMany({ where: byUpdatedAt, orderBy: { updatedAt: "asc" } }),
     prisma.fishBatch.findMany({ where: byUpdatedAt, orderBy: { updatedAt: "asc" } }),
     prisma.stocking.findMany({ where: byUpdatedAt, orderBy: { updatedAt: "asc" } }),
     prisma.fishTransfer.findMany({ where: byCreatedAt, orderBy: { createdAt: "asc" } }),
+    prisma.feed.findMany({ where: byUpdatedAt, orderBy: { updatedAt: "asc" } }),
+    // Feed*/Mortality*/Sampling son append-only (sin updatedAt), igual
+    // criterio que FishTransfer: su cursor incremental es createdAt.
+    prisma.feedInventoryMovement.findMany({ where: byCreatedAt, orderBy: { createdAt: "asc" } }),
+    prisma.feedingRecord.findMany({ where: byCreatedAt, orderBy: { createdAt: "asc" } }),
+    prisma.mortalityRecord.findMany({ where: byCreatedAt, orderBy: { createdAt: "asc" } }),
+    prisma.sampling.findMany({ where: byCreatedAt, orderBy: { createdAt: "asc" } }),
   ]);
 
   return NextResponse.json({
@@ -183,6 +301,11 @@ export async function GET(request: Request) {
     fishBatches: fishBatches.map(serializeFishBatch),
     stockings: stockings.map(serializeStocking),
     fishTransfers: fishTransfers.map(serializeFishTransfer),
+    feeds: feeds.map(serializeFeed),
+    feedInventoryMovements: feedInventoryMovements.map(serializeFeedInventoryMovement),
+    feedingRecords: feedingRecords.map(serializeFeedingRecord),
+    mortalityRecords: mortalityRecords.map(serializeMortalityRecord),
+    samplings: samplings.map(serializeSampling),
     serverTime: serverTime.toISOString(),
   });
 }

@@ -12,11 +12,17 @@
 // applyFishTransferOperation y OFFLINE_SYNC.md §8 (multi-dispositivo).
 import type { Prisma } from "@/generated/prisma/client";
 import { getBatchPondBalance } from "@/lib/domain/batchLedger";
+import { getFeedStock, isFeedExitMovement } from "@/lib/domain/feedLedger";
 import type {
+  FeedingRecordPayload,
+  FeedInventoryMovementPayload,
+  FeedPayload,
   FishBatchPayload,
   FishTransferPayload,
+  MortalityRecordPayload,
   PondPayload,
   PushOperation,
+  SamplingPayload,
   SpeciesPayload,
   StockingPayload,
 } from "@/lib/validation/sync";
@@ -142,6 +148,101 @@ function fishTransferData(payload: FishTransferPayload) {
   };
 }
 
+function feedData(payload: FeedPayload) {
+  return {
+    id: payload.id,
+    name: payload.name,
+    brand: payload.brand,
+    proteinPercent: payload.proteinPercent,
+    pelletSizeMm: payload.pelletSizeMm,
+    bagWeightKg: payload.bagWeightKg,
+    defaultBagPrice: payload.defaultBagPrice,
+    defaultCostPerKg: payload.defaultCostPerKg,
+    recommendedStage: payload.recommendedStage,
+    notes: payload.notes,
+    minimumStockKg: payload.minimumStockKg,
+    active: payload.active,
+    createdAt: new Date(payload.createdAt),
+    updatedAt: new Date(payload.updatedAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+    version: payload.version,
+    deviceId: payload.deviceId,
+    createdBy: payload.createdBy,
+    updatedBy: payload.updatedBy,
+  };
+}
+
+function feedInventoryMovementData(payload: FeedInventoryMovementPayload) {
+  return {
+    id: payload.id,
+    feedId: payload.feedId,
+    movementType: payload.movementType,
+    quantityKg: payload.quantityKg,
+    unitCostPerKg: payload.unitCostPerKg,
+    totalCost: payload.totalCost,
+    date: new Date(payload.date),
+    sourceType: payload.sourceType,
+    sourceId: payload.sourceId,
+    notes: payload.notes,
+    deviceId: payload.deviceId,
+    createdAt: new Date(payload.createdAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+  };
+}
+
+function feedingRecordData(payload: FeedingRecordPayload) {
+  return {
+    id: payload.id,
+    batchId: payload.batchId,
+    pondId: payload.pondId,
+    feedId: payload.feedId,
+    date: new Date(payload.date),
+    time: payload.time,
+    quantityKg: payload.quantityKg,
+    shift: payload.shift,
+    responsibleName: payload.responsibleName,
+    notes: payload.notes,
+    deviceId: payload.deviceId,
+    createdAt: new Date(payload.createdAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+  };
+}
+
+function mortalityRecordData(payload: MortalityRecordPayload) {
+  return {
+    id: payload.id,
+    batchId: payload.batchId,
+    pondId: payload.pondId,
+    date: new Date(payload.date),
+    quantity: payload.quantity,
+    estimatedAverageWeightG: payload.estimatedAverageWeightG,
+    cause: payload.cause,
+    notes: payload.notes,
+    responsibleName: payload.responsibleName,
+    deviceId: payload.deviceId,
+    createdAt: new Date(payload.createdAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+  };
+}
+
+function samplingData(payload: SamplingPayload) {
+  return {
+    id: payload.id,
+    batchId: payload.batchId,
+    pondId: payload.pondId,
+    date: new Date(payload.date),
+    sampleFishCount: payload.sampleFishCount,
+    totalSampleWeightKg: payload.totalSampleWeightKg,
+    averageWeightG: payload.averageWeightG,
+    averageLengthCm: payload.averageLengthCm,
+    notes: payload.notes,
+    responsibleName: payload.responsibleName,
+    deviceId: payload.deviceId,
+    createdAt: new Date(payload.createdAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+  };
+}
+
 async function applySpeciesOperation(
   tx: TransactionClient,
   op: Extract<PushOperation, { entityType: "Species" }>,
@@ -241,7 +342,7 @@ async function getCurrentPondBalance(
   batchId: string,
   pondId: string,
 ): Promise<number> {
-  const [stockings, transfers] = await Promise.all([
+  const [stockings, transfers, mortalities] = await Promise.all([
     tx.stocking.findMany({
       where: { batchId, deletedAt: null },
       select: { batchId: true, pondId: true, quantity: true },
@@ -250,8 +351,12 @@ async function getCurrentPondBalance(
       where: { batchId, deletedAt: null },
       select: { batchId: true, fromPondId: true, toPondId: true, quantity: true },
     }),
+    tx.mortalityRecord.findMany({
+      where: { batchId, deletedAt: null },
+      select: { batchId: true, pondId: true, quantity: true },
+    }),
   ]);
-  return getBatchPondBalance(stockings, transfers, batchId, pondId);
+  return getBatchPondBalance(stockings, transfers, mortalities, batchId, pondId);
 }
 
 async function applyFishTransferOperation(
@@ -285,6 +390,125 @@ async function applyFishTransferOperation(
   return "applied";
 }
 
+async function applyFeedOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "Feed" }>,
+): Promise<ApplyResult> {
+  const data = feedData(op.payload);
+
+  if (op.operation === "CREATE") {
+    await tx.feed.create({ data });
+    return "applied";
+  }
+
+  const current = await tx.feed.findUnique({ where: { id: op.entityId } });
+  if (!current) {
+    await tx.feed.create({ data });
+    return "applied";
+  }
+
+  if (data.version <= current.version) {
+    return "conflict";
+  }
+
+  await tx.feed.update({ where: { id: op.entityId }, data });
+  return "applied";
+}
+
+async function getCurrentFeedStock(tx: TransactionClient, feedId: string): Promise<number> {
+  const movements = await tx.feedInventoryMovement.findMany({
+    where: { feedId, deletedAt: null },
+    select: { feedId: true, movementType: true, quantityKg: true },
+  });
+  return getFeedStock(
+    movements.map((m) => ({ ...m, quantityKg: Number(m.quantityKg) })),
+    feedId,
+  );
+}
+
+async function applyFeedInventoryMovementOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "FeedInventoryMovement" }>,
+): Promise<ApplyResult> {
+  if (op.operation !== "CREATE") {
+    // Ver nota de applyStockingOperation: defensivo, sin semántica de
+    // versión, no lo ejerce la UI de esta fase.
+    const data = feedInventoryMovementData(op.payload);
+    await tx.feedInventoryMovement.upsert({ where: { id: op.entityId }, create: data, update: data });
+    return "applied";
+  }
+
+  if (!isFeedExitMovement(op.payload.movementType)) {
+    // Una entrada (compra, stock inicial, ajuste positivo, devolución)
+    // nunca puede dejar el stock en negativo: no hace falta bloquear ni
+    // validar nada, se aplica directo.
+    await tx.feedInventoryMovement.create({ data: feedInventoryMovementData(op.payload) });
+    return "applied";
+  }
+
+  // Lock por alimento (§11 del encargo de Fase 3 — mismo criterio que el
+  // lock por lote de FishTransfer): dos consumos concurrentes del MISMO
+  // alimento nunca deben poder leer el mismo stock "disponible" y ambos
+  // darlo por válido.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${op.payload.feedId})::bigint)`;
+
+  const currentStock = await getCurrentFeedStock(tx, op.payload.feedId);
+  if (op.payload.quantityKg > currentStock) {
+    // Nunca se inventa una cantidad ni se permite stock negativo (§10):
+    // la operación queda como conflicto, visible para revisión.
+    return "conflict";
+  }
+
+  await tx.feedInventoryMovement.create({ data: feedInventoryMovementData(op.payload) });
+  return "applied";
+}
+
+async function applyFeedingRecordOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "FeedingRecord" }>,
+): Promise<ApplyResult> {
+  // Append-only: el FeedInventoryMovement CONSUMPTION vinculado es la
+  // única operación que valida stock (ver arriba). El FeedingRecord en sí
+  // es solo el registro descriptivo del evento.
+  const data = feedingRecordData(op.payload);
+  await tx.feedingRecord.upsert({ where: { id: op.entityId }, create: data, update: data });
+  return "applied";
+}
+
+async function applyMortalityRecordOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "MortalityRecord" }>,
+): Promise<ApplyResult> {
+  if (op.operation !== "CREATE") {
+    const data = mortalityRecordData(op.payload);
+    await tx.mortalityRecord.upsert({ where: { id: op.entityId }, create: data, update: data });
+    return "applied";
+  }
+
+  // Mismo criterio que FishTransfer (§16 del encargo de Fase 3): la
+  // mortalidad nunca puede dejar el balance del estanque en negativo, y
+  // dos registros de mortalidad concurrentes del mismo lote/estanque
+  // nunca deben poder ambos "gastar" el mismo balance.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${op.payload.batchId})::bigint)`;
+
+  const available = await getCurrentPondBalance(tx, op.payload.batchId, op.payload.pondId);
+  if (op.payload.quantity > available) {
+    return "conflict";
+  }
+
+  await tx.mortalityRecord.create({ data: mortalityRecordData(op.payload) });
+  return "applied";
+}
+
+async function applySamplingOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "Sampling" }>,
+): Promise<ApplyResult> {
+  const data = samplingData(op.payload);
+  await tx.sampling.upsert({ where: { id: op.entityId }, create: data, update: data });
+  return "applied";
+}
+
 export async function applyOperation(
   tx: TransactionClient,
   op: PushOperation,
@@ -300,5 +524,15 @@ export async function applyOperation(
       return applyStockingOperation(tx, op);
     case "FishTransfer":
       return applyFishTransferOperation(tx, op);
+    case "Feed":
+      return applyFeedOperation(tx, op);
+    case "FeedInventoryMovement":
+      return applyFeedInventoryMovementOperation(tx, op);
+    case "FeedingRecord":
+      return applyFeedingRecordOperation(tx, op);
+    case "MortalityRecord":
+      return applyMortalityRecordOperation(tx, op);
+    case "Sampling":
+      return applySamplingOperation(tx, op);
   }
 }
