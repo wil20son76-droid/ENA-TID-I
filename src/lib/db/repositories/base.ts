@@ -23,7 +23,30 @@ type Updatable<T extends AuditFields & { id: string }> = Partial<
   Omit<T, keyof AuditFields | "id">
 >;
 
-async function enqueueSyncOperation(
+/**
+ * Campos de auditoría reducidos para eventos append-only (Stocking,
+ * FishTransfer): sin `version`/`createdBy`/`updatedBy` porque nunca se
+ * editan desde la UI, solo se crean (§8/§10/§25 del encargo de Fase 2).
+ */
+export interface EventAuditFields {
+  deviceId: string;
+  createdAt: string;
+  deletedAt: string | null;
+}
+
+type EventCreatable<T extends EventAuditFields & { id: string }> = Omit<
+  T,
+  keyof EventAuditFields | "id"
+>;
+
+/**
+ * Encola una operación de sincronización. Exportada para los pocos casos
+ * (creaciones compuestas como lote+siembra, ver fishBatchRepository.ts)
+ * que necesitan construir varios registros y varias entradas de outbox
+ * dentro de UNA misma transacción manual — el resto del código debe
+ * preferir createRecord/updateRecord/softDeleteRecord/createEventRecord.
+ */
+export async function enqueueSyncOperation(
   entityType: SyncEntityType,
   entityId: string,
   operation: SyncOperationType,
@@ -133,4 +156,31 @@ export async function softDeleteRecord<T extends AuditFields & { id: string }>(
     await table.put(updated);
     await enqueueSyncOperation(entityType, id, "DELETE", updated, deviceId);
   });
+}
+
+/**
+ * Crea un evento append-only (Stocking independiente, FishTransfer) y
+ * encola su operación CREATE, en una transacción. A diferencia de
+ * createRecord, no lleva version/createdBy/updatedBy.
+ */
+export async function createEventRecord<T extends EventAuditFields & { id: string }>(
+  table: EntityTable<T, "id">,
+  entityType: SyncEntityType,
+  input: EventCreatable<T>,
+): Promise<T> {
+  const deviceId = getDeviceId();
+  const record = {
+    ...input,
+    id: generateId(),
+    deviceId,
+    createdAt: new Date().toISOString(),
+    deletedAt: null,
+  } as T;
+
+  await db.transaction("rw", table, db.syncQueue, async () => {
+    await table.add(record);
+    await enqueueSyncOperation(entityType, record.id, "CREATE", record, deviceId);
+  });
+
+  return record;
 }
