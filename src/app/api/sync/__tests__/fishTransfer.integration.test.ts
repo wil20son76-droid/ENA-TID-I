@@ -186,6 +186,11 @@ function transferPayload(opts: {
 
 beforeEach(async () => {
   await prisma.syncOperation.deleteMany();
+  await prisma.feedingRecord.deleteMany();
+  await prisma.mortalityRecord.deleteMany();
+  await prisma.sampling.deleteMany();
+  await prisma.feedInventoryMovement.deleteMany();
+  await prisma.feed.deleteMany();
   await prisma.fishTransfer.deleteMany();
   await prisma.stocking.deleteMany();
   await prisma.fishBatch.deleteMany();

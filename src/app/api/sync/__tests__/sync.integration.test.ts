@@ -55,10 +55,16 @@ function pullRequest(since?: string) {
 
 beforeEach(async () => {
   // Orden respetando las llaves foráneas: los tests de otros archivos
-  // (fishTransfer.integration.test.ts) comparten esta misma base de datos
-  // de pruebas y pueden dejar FishBatch/Stocking/FishTransfer colgando de
-  // Species/Pond si no se limpia todo en cada beforeEach.
+  // (fishTransfer.integration.test.ts, dailyOperations.integration.test.ts)
+  // comparten esta misma base de datos de pruebas y pueden dejar filas
+  // colgando de Species/Pond/FishBatch/Feed si no se limpia todo en cada
+  // beforeEach.
   await prisma.syncOperation.deleteMany();
+  await prisma.feedingRecord.deleteMany();
+  await prisma.mortalityRecord.deleteMany();
+  await prisma.sampling.deleteMany();
+  await prisma.feedInventoryMovement.deleteMany();
+  await prisma.feed.deleteMany();
   await prisma.fishTransfer.deleteMany();
   await prisma.stocking.deleteMany();
   await prisma.fishBatch.deleteMany();
