@@ -9,9 +9,11 @@
 // filas de Prisma) porque ambos lados comparten los mismos nombres de
 // campo (batchId, pondId, quantity, fromPondId, toPondId).
 //
-// En esta fase el balance solo considera siembras ± traslados. Cuando se
-// añadan mortalidad (Fase 3) y cosechas, se sumarán como salidas más aquí
-// mismo, sin cambiar la forma de llamar a estas funciones.
+// Hasta la Fase 2 el balance solo consideraba siembras ± traslados. La
+// Fase 3 (§17 del encargo) suma la mortalidad como una salida más, con el
+// mismo tratamiento que un traslado saliente: reduce el balance del
+// estanque donde ocurrió, nunca el de otro. Cuando se añadan cosechas se
+// integrarán de la misma forma, sin cambiar la firma de estas funciones.
 
 export interface StockingLedgerEntry {
   batchId: string;
@@ -26,10 +28,17 @@ export interface TransferLedgerEntry {
   quantity: number;
 }
 
+export interface MortalityLedgerEntry {
+  batchId: string;
+  pondId: string;
+  quantity: number;
+}
+
 /** Peces de `batchId` presentes actualmente en `pondId`. */
 export function getBatchPondBalance(
   stockings: readonly StockingLedgerEntry[],
   transfers: readonly TransferLedgerEntry[],
+  mortalities: readonly MortalityLedgerEntry[],
   batchId: string,
   pondId: string,
 ): number {
@@ -42,6 +51,9 @@ export function getBatchPondBalance(
     if (t.toPondId === pondId) balance += t.quantity;
     if (t.fromPondId === pondId) balance -= t.quantity;
   }
+  for (const m of mortalities) {
+    if (m.batchId === batchId && m.pondId === pondId) balance -= m.quantity;
+  }
   return balance;
 }
 
@@ -53,6 +65,7 @@ export function getBatchPondBalance(
 export function getBatchDistribution(
   stockings: readonly StockingLedgerEntry[],
   transfers: readonly TransferLedgerEntry[],
+  mortalities: readonly MortalityLedgerEntry[],
   batchId: string,
 ): Record<string, number> {
   const balances = new Map<string, number>();
@@ -66,6 +79,10 @@ export function getBatchDistribution(
     balances.set(t.toPondId, (balances.get(t.toPondId) ?? 0) + t.quantity);
     balances.set(t.fromPondId, (balances.get(t.fromPondId) ?? 0) - t.quantity);
   }
+  for (const m of mortalities) {
+    if (m.batchId !== batchId) continue;
+    balances.set(m.pondId, (balances.get(m.pondId) ?? 0) - m.quantity);
+  }
 
   const distribution: Record<string, number> = {};
   for (const [pondId, quantity] of balances) {
@@ -78,9 +95,10 @@ export function getBatchDistribution(
 export function getBatchTotalBalance(
   stockings: readonly StockingLedgerEntry[],
   transfers: readonly TransferLedgerEntry[],
+  mortalities: readonly MortalityLedgerEntry[],
   batchId: string,
 ): number {
-  const distribution = getBatchDistribution(stockings, transfers, batchId);
+  const distribution = getBatchDistribution(stockings, transfers, mortalities, batchId);
   return Object.values(distribution).reduce((sum, qty) => sum + qty, 0);
 }
 
@@ -91,6 +109,7 @@ export function getBatchTotalBalance(
 export function getPondOccupancy(
   stockings: readonly StockingLedgerEntry[],
   transfers: readonly TransferLedgerEntry[],
+  mortalities: readonly MortalityLedgerEntry[],
   pondId: string,
 ): Record<string, number> {
   const batchIds = new Set<string>();
@@ -99,11 +118,44 @@ export function getPondOccupancy(
     if (t.toPondId === pondId) batchIds.add(t.batchId);
     if (t.fromPondId === pondId) batchIds.add(t.batchId);
   }
+  for (const m of mortalities) if (m.pondId === pondId) batchIds.add(m.batchId);
 
   const occupancy: Record<string, number> = {};
   for (const batchId of batchIds) {
-    const qty = getBatchPondBalance(stockings, transfers, batchId, pondId);
+    const qty = getBatchPondBalance(stockings, transfers, mortalities, batchId, pondId);
     if (qty > 0) occupancy[batchId] = qty;
   }
   return occupancy;
+}
+
+/** Total histórico sembrado de un lote (§19): nunca cambia por traslados, mortalidad o cosechas. */
+export function getBatchStockedTotal(
+  stockings: readonly StockingLedgerEntry[],
+  batchId: string,
+): number {
+  return stockings.reduce((sum, s) => (s.batchId === batchId ? sum + s.quantity : sum), 0);
+}
+
+/** Mortalidad acumulada histórica de un lote (independiente de en qué estanque ocurrió). */
+export function getBatchMortalityTotal(
+  mortalities: readonly MortalityLedgerEntry[],
+  batchId: string,
+): number {
+  return mortalities.reduce((sum, m) => (m.batchId === batchId ? sum + m.quantity : sum), 0);
+}
+
+/**
+ * Supervivencia % = peces actuales / peces sembrados × 100 (§19). Evita
+ * división por cero: sin siembra registrada, no hay supervivencia que
+ * calcular.
+ */
+export function getSurvivalPercent(currentTotal: number, stockedTotal: number): number | null {
+  if (stockedTotal <= 0) return null;
+  return (currentTotal / stockedTotal) * 100;
+}
+
+/** Mortalidad % = mortalidad acumulada / peces sembrados × 100. */
+export function getMortalityPercent(mortalityTotal: number, stockedTotal: number): number | null {
+  if (stockedTotal <= 0) return null;
+  return (mortalityTotal / stockedTotal) * 100;
 }
