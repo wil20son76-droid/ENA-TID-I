@@ -35,8 +35,8 @@ describe("getConflictMessage", () => {
     expect(message).toContain("balance del estanque");
   });
 
-  it("Species/Pond/FishBatch/Feed: mensaje genérico de versión (LWW real)", () => {
-    for (const entityType of ["Species", "Pond", "FishBatch", "Feed"] as const) {
+  it("Species/Pond/FishBatch/Feed/Task: mensaje genérico de versión (LWW real)", () => {
+    for (const entityType of ["Species", "Pond", "FishBatch", "Feed", "Task"] as const) {
       expect(getConflictMessage(entityType, {})).toMatch(/versión más reciente/);
     }
   });

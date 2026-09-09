@@ -28,6 +28,8 @@ function emptyPullResponse() {
     feedingRecords: [],
     mortalityRecords: [],
     samplings: [],
+    waterQualityRecords: [],
+    tasks: [],
     serverTime: new Date().toISOString(),
   };
 }
@@ -264,6 +266,8 @@ describe("runSync", () => {
         feedingRecords: [],
         mortalityRecords: [],
         samplings: [],
+        waterQualityRecords: [],
+        tasks: [],
         serverTime: now,
       });
     });
@@ -357,6 +361,8 @@ describe("runSync", () => {
         feedingRecords: [],
         mortalityRecords: [],
         samplings: [],
+        waterQualityRecords: [],
+        tasks: [],
         serverTime: now,
       });
     });
@@ -481,6 +487,8 @@ describe("runSync", () => {
             deletedAt: null,
           },
         ],
+        waterQualityRecords: [],
+        tasks: [],
         serverTime: now,
       });
     });

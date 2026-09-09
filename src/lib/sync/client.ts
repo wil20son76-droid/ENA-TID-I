@@ -13,6 +13,8 @@ import type {
   SpeciesRecord,
   StockingRecord,
   SyncQueueRecord,
+  TaskRecord,
+  WaterQualityRecordRecord,
 } from "../db/types";
 
 export type PushResultStatus = "applied" | "duplicate" | "conflict" | "error";
@@ -66,6 +68,8 @@ export interface PullResponse {
   feedingRecords: FeedingRecordRecord[];
   mortalityRecords: MortalityRecordRecord[];
   samplings: SamplingRecord[];
+  waterQualityRecords: WaterQualityRecordRecord[];
+  tasks: TaskRecord[];
   serverTime: string;
 }
 

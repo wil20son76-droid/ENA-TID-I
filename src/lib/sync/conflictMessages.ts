@@ -64,6 +64,10 @@ export function getConflictMessage(entityType: SyncEntityType, payload: unknown)
     case "Pond":
     case "FishBatch":
     case "Feed":
+    case "Task":
+      // Task es mutable, igual que Species/Pond — su conflicto SÍ es de
+      // versión (dos dispositivos editando la misma tarea offline, §34),
+      // así que el mensaje genérico de LWW es correcto aquí.
       return GENERIC_VERSION_CONFLICT;
     // Estas entidades nunca producen "conflict" en el servidor (son
     // append-only vía upsert, o su comando compuesto no valida balance),
@@ -72,6 +76,7 @@ export function getConflictMessage(entityType: SyncEntityType, payload: unknown)
     case "FeedingRecord":
     case "Sampling":
     case "CreateFeedWithInitialStock":
+    case "WaterQualityRecord":
       return GENERIC_VERSION_CONFLICT;
   }
 }

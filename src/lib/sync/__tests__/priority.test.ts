@@ -35,6 +35,11 @@ describe("getSyncPriority", () => {
     expect(getSyncPriority("Stocking")).toBe(3);
   });
 
+  it("nivel 3: WaterQualityRecord/Task (Fase 4) no validan balance, no necesitan esperar a Stocking", () => {
+    expect(getSyncPriority("WaterQualityRecord")).toBe(3);
+    expect(getSyncPriority("Task")).toBe(3);
+  });
+
   it("nivel 4: eventos que dependen de FishBatch/Pond/Feed/Stocking", () => {
     expect(getSyncPriority("FishTransfer")).toBe(4);
     expect(getSyncPriority("MortalityRecord")).toBe(4);
@@ -97,6 +102,23 @@ describe("getDependencyEntityIds", () => {
     expect(
       getDependencyEntityIds("RegisterFeeding", { batchId: "b-1", pondId: "p-1", feedId: "f-1" }),
     ).toEqual(["b-1", "p-1", "f-1"]);
+  });
+
+  it("WaterQualityRecord depende de pondId; batchId es opcional (§32 de Fase 4)", () => {
+    expect(getDependencyEntityIds("WaterQualityRecord", { pondId: "p-1" })).toEqual(["p-1"]);
+    expect(
+      getDependencyEntityIds("WaterQualityRecord", { pondId: "p-1", batchId: "b-1" }),
+    ).toEqual(["p-1", "b-1"]);
+    expect(getDependencyEntityIds("WaterQualityRecord", {})).toEqual([]);
+  });
+
+  it("Task: pondId y batchId son ambos opcionales (§23/§32 de Fase 4)", () => {
+    expect(getDependencyEntityIds("Task", {})).toEqual([]);
+    expect(getDependencyEntityIds("Task", { pondId: "p-1" })).toEqual(["p-1"]);
+    expect(getDependencyEntityIds("Task", { pondId: "p-1", batchId: "b-1" })).toEqual([
+      "p-1",
+      "b-1",
+    ]);
   });
 
   it("payload no-objeto o campos faltantes no rompe: devuelve solo los ids presentes", () => {

@@ -342,6 +342,8 @@ async function pushSequentially(
 
 beforeEach(async () => {
   await prisma.syncOperation.deleteMany();
+  await prisma.task.deleteMany();
+  await prisma.waterQualityRecord.deleteMany();
   await prisma.feedingRecord.deleteMany();
   await prisma.mortalityRecord.deleteMany();
   await prisma.sampling.deleteMany();

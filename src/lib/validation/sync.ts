@@ -27,6 +27,9 @@ export const syncEntityTypeSchema = z.enum([
   // siempre entrega las entidades reales, nunca el comando que las creó.
   "RegisterFeeding",
   "CreateFeedWithInitialStock",
+  // Fase 4 (calidad del agua, alertas y planificación).
+  "WaterQualityRecord",
+  "Task",
 ]);
 export const pondStatusSchema = z.enum([
   "EMPTY",
@@ -67,6 +70,8 @@ export const mortalityCauseSchema = z.enum([
   "ACCIDENT",
   "OTHER",
 ]);
+export const taskStatusSchema = z.enum(["PENDING", "COMPLETED", "CANCELLED"]);
+export const taskPrioritySchema = z.enum(["LOW", "NORMAL", "HIGH", "URGENT"]);
 
 // Campos de auditoría completos: entidades mutables (Species, Pond,
 // FishBatch), que sí se editan y por tanto necesitan versión para
@@ -296,6 +301,67 @@ export const createFeedWithInitialStockPayloadSchema = z.object({
   initialStockDate: z.iso.datetime(),
 });
 
+// Fase 4: calidad del agua (§1-§11 del encargo) — evento append-only,
+// igual criterio que Sampling/MortalityRecord (sin version/createdBy/
+// updatedBy). Los límites de pH (0-14) y temperatura (-5 a 45 °C) son
+// rangos FÍSICOS absolutos (§3, §42: "validar datos físicos también en
+// servidor, no confiar solo en cliente") — nunca el rango recomendado
+// para una especie, eso lo evalúa evaluateWaterQuality en el cliente
+// (src/lib/domain/waterQuality.ts) contra el historial ya sincronizado.
+// Al menos un parámetro medido, igual que exige el cliente (§2).
+export const waterQualityRecordPayloadSchema = z
+  .object({
+    id: z.uuid(),
+    pondId: z.uuid(),
+    batchId: z.uuid().nullable(),
+    date: z.iso.datetime(),
+    time: z.string().max(10).nullable(),
+    temperatureC: z.number().min(-5).max(45).nullable(),
+    ph: z.number().min(0).max(14).nullable(),
+    dissolvedOxygenMgL: z.number().nonnegative().nullable(),
+    transparencyCm: z.number().nonnegative().nullable(),
+    ammoniaMgL: z.number().nonnegative().nullable(),
+    nitriteMgL: z.number().nonnegative().nullable(),
+    alkalinityMgL: z.number().nonnegative().nullable(),
+    waterLevelCm: z.number().nonnegative().nullable(),
+    notes: z.string().max(2000).nullable(),
+    responsibleName: z.string().max(200).nullable(),
+    deviceId: z.string().min(1).max(200),
+    createdAt: z.iso.datetime(),
+    deletedAt: z.iso.datetime().nullable(),
+  })
+  .refine(
+    (payload) =>
+      payload.temperatureC != null ||
+      payload.ph != null ||
+      payload.dissolvedOxygenMgL != null ||
+      payload.transparencyCm != null ||
+      payload.ammoniaMgL != null ||
+      payload.nitriteMgL != null ||
+      payload.alkalinityMgL != null ||
+      payload.waterLevelCm != null,
+    { message: "Debe informarse al menos un parámetro medido." },
+  );
+
+// Fase 4: tarea manual (§18-§27) — a diferencia del resto del dominio
+// productivo, SÍ es mutable (§19): lleva los mismos campos de auditoría
+// que Species/Pond/Feed para resolución de conflictos last-write-wins.
+export const taskPayloadSchema = z.object({
+  id: z.uuid(),
+  title: z.string().min(1).max(300),
+  description: z.string().max(2000).nullable(),
+  dueDate: z.iso.datetime(),
+  dueTime: z.string().max(10).nullable(),
+  priority: taskPrioritySchema,
+  status: taskStatusSchema,
+  pondId: z.uuid().nullable(),
+  batchId: z.uuid().nullable(),
+  assignedToName: z.string().max(200).nullable(),
+  notes: z.string().max(2000).nullable(),
+  completedAt: z.iso.datetime().nullable(),
+  ...auditFieldsSchema,
+});
+
 export type SpeciesPayload = z.infer<typeof speciesPayloadSchema>;
 export type PondPayload = z.infer<typeof pondPayloadSchema>;
 export type FishBatchPayload = z.infer<typeof fishBatchPayloadSchema>;
@@ -308,6 +374,8 @@ export type MortalityRecordPayload = z.infer<typeof mortalityRecordPayloadSchema
 export type SamplingPayload = z.infer<typeof samplingPayloadSchema>;
 export type RegisterFeedingPayload = z.infer<typeof registerFeedingPayloadSchema>;
 export type CreateFeedWithInitialStockPayload = z.infer<typeof createFeedWithInitialStockPayloadSchema>;
+export type WaterQualityRecordPayload = z.infer<typeof waterQualityRecordPayloadSchema>;
+export type TaskPayload = z.infer<typeof taskPayloadSchema>;
 
 const basePushOperationSchema = z.object({
   // Id de la propia operación de sincronización — es la clave de
@@ -366,6 +434,14 @@ export const pushOperationSchema = z.discriminatedUnion("entityType", [
   basePushOperationSchema.extend({
     entityType: z.literal("CreateFeedWithInitialStock"),
     payload: createFeedWithInitialStockPayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("WaterQualityRecord"),
+    payload: waterQualityRecordPayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("Task"),
+    payload: taskPayloadSchema,
   }),
 ]);
 

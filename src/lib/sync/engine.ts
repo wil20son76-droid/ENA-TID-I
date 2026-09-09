@@ -151,6 +151,8 @@ async function pullAndMerge(): Promise<void> {
       db.feedingRecords,
       db.mortalityRecords,
       db.samplings,
+      db.waterQualityRecords,
+      db.tasks,
     ],
     async () => {
       for (const species of response.species) {
@@ -182,6 +184,12 @@ async function pullAndMerge(): Promise<void> {
       }
       for (const sampling of response.samplings) {
         await db.samplings.put(sampling);
+      }
+      for (const record of response.waterQualityRecords) {
+        await db.waterQualityRecords.put(record);
+      }
+      for (const task of response.tasks) {
+        await db.tasks.put(task);
       }
     },
   );

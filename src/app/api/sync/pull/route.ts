@@ -24,6 +24,8 @@ import type {
   Sampling,
   Species,
   Stocking,
+  Task,
+  WaterQualityRecord,
 } from "@/generated/prisma/client";
 
 function toNullableNumber(value: unknown): number | null {
@@ -243,6 +245,53 @@ function serializeSampling(sampling: Sampling) {
   };
 }
 
+function serializeWaterQualityRecord(record: WaterQualityRecord) {
+  return {
+    id: record.id,
+    pondId: record.pondId,
+    batchId: record.batchId,
+    date: record.date.toISOString(),
+    time: record.time,
+    temperatureC: toNullableNumber(record.temperatureC),
+    ph: toNullableNumber(record.ph),
+    dissolvedOxygenMgL: toNullableNumber(record.dissolvedOxygenMgL),
+    transparencyCm: toNullableNumber(record.transparencyCm),
+    ammoniaMgL: toNullableNumber(record.ammoniaMgL),
+    nitriteMgL: toNullableNumber(record.nitriteMgL),
+    alkalinityMgL: toNullableNumber(record.alkalinityMgL),
+    waterLevelCm: toNullableNumber(record.waterLevelCm),
+    notes: record.notes,
+    responsibleName: record.responsibleName,
+    deviceId: record.deviceId,
+    createdAt: record.createdAt.toISOString(),
+    deletedAt: record.deletedAt ? record.deletedAt.toISOString() : null,
+  };
+}
+
+function serializeTask(task: Task) {
+  return {
+    id: task.id,
+    title: task.title,
+    description: task.description,
+    dueDate: task.dueDate.toISOString(),
+    dueTime: task.dueTime,
+    priority: task.priority,
+    status: task.status,
+    pondId: task.pondId,
+    batchId: task.batchId,
+    assignedToName: task.assignedToName,
+    notes: task.notes,
+    completedAt: task.completedAt ? task.completedAt.toISOString() : null,
+    createdAt: task.createdAt.toISOString(),
+    updatedAt: task.updatedAt.toISOString(),
+    deletedAt: task.deletedAt ? task.deletedAt.toISOString() : null,
+    version: task.version,
+    deviceId: task.deviceId,
+    createdBy: task.createdBy,
+    updatedBy: task.updatedBy,
+  };
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const parsed = pullQuerySchema.safeParse({
@@ -280,6 +329,8 @@ export async function GET(request: Request) {
     feedingRecords,
     mortalityRecords,
     samplings,
+    waterQualityRecords,
+    tasks,
   ] = await Promise.all([
     prisma.species.findMany({ where: byUpdatedAt, orderBy: { updatedAt: "asc" } }),
     prisma.pond.findMany({ where: byUpdatedAt, orderBy: { updatedAt: "asc" } }),
@@ -293,6 +344,10 @@ export async function GET(request: Request) {
     prisma.feedingRecord.findMany({ where: byCreatedAt, orderBy: { createdAt: "asc" } }),
     prisma.mortalityRecord.findMany({ where: byCreatedAt, orderBy: { createdAt: "asc" } }),
     prisma.sampling.findMany({ where: byCreatedAt, orderBy: { createdAt: "asc" } }),
+    // WaterQualityRecord es append-only (Fase 4): mismo criterio, cursor
+    // por createdAt. Task SÍ es mutable: cursor por updatedAt.
+    prisma.waterQualityRecord.findMany({ where: byCreatedAt, orderBy: { createdAt: "asc" } }),
+    prisma.task.findMany({ where: byUpdatedAt, orderBy: { updatedAt: "asc" } }),
   ]);
 
   return NextResponse.json({
@@ -306,6 +361,8 @@ export async function GET(request: Request) {
     feedingRecords: feedingRecords.map(serializeFeedingRecord),
     mortalityRecords: mortalityRecords.map(serializeMortalityRecord),
     samplings: samplings.map(serializeSampling),
+    waterQualityRecords: waterQualityRecords.map(serializeWaterQualityRecord),
+    tasks: tasks.map(serializeTask),
     serverTime: serverTime.toISOString(),
   });
 }

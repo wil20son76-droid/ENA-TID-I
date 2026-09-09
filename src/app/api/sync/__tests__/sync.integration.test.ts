@@ -60,6 +60,8 @@ beforeEach(async () => {
   // colgando de Species/Pond/FishBatch/Feed si no se limpia todo en cada
   // beforeEach.
   await prisma.syncOperation.deleteMany();
+  await prisma.task.deleteMany();
+  await prisma.waterQualityRecord.deleteMany();
   await prisma.feedingRecord.deleteMany();
   await prisma.mortalityRecord.deleteMany();
   await prisma.sampling.deleteMany();

@@ -35,8 +35,15 @@ const SYNC_PRIORITY: Record<SyncEntityType, number> = {
   CreateFeedWithInitialStock: 1,
   // Nivel 2: depende de un catálogo de nivel 1.
   FishBatch: 2,
-  // Nivel 3: depende de FishBatch (nivel 2) + Pond (nivel 1).
+  // Nivel 3: depende de FishBatch (nivel 2) + Pond (nivel 1). También
+  // WaterQualityRecord/Task (Fase 4, §32 del encargo): dependen de Pond
+  // (Task solo opcionalmente) y opcionalmente de FishBatch, pero —a
+  // diferencia del nivel 4— ninguna de las dos valida balance de peces
+  // ni de alimento, así que no necesitan esperar a que Stocking se haya
+  // aplicado: solo que exista el Pond/FishBatch que referencian.
   Stocking: 3,
+  WaterQualityRecord: 3,
+  Task: 3,
   // Nivel 4: eventos que dependen de FishBatch/Pond/Feed ya existentes,
   // y cuya validación de negocio (balance/stock) además necesita que
   // Stocking ya se haya aplicado para no fallar como "conflict" por un
@@ -104,6 +111,20 @@ export function getDependencyEntityIds(entityType: SyncEntityType, payload: unkn
       const pondId = readField(payload, "pondId");
       const feedId = readField(payload, "feedId");
       return [batchId, pondId, feedId].filter((id): id is string => !!id);
+    }
+    case "WaterQualityRecord": {
+      // pondId siempre presente; batchId es opcional (§2/§32 del encargo
+      // de Fase 4 — una medición puede no estar ligada a ningún lote).
+      const pondId = readField(payload, "pondId");
+      const batchId = readField(payload, "batchId");
+      return [pondId, batchId].filter((id): id is string => !!id);
+    }
+    case "Task": {
+      // Ambos opcionales (§23/§32): una tarea puede no estar ligada a
+      // ningún estanque ni lote.
+      const pondId = readField(payload, "pondId");
+      const batchId = readField(payload, "batchId");
+      return [pondId, batchId].filter((id): id is string => !!id);
     }
   }
 }

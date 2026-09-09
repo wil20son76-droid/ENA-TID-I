@@ -1,15 +1,18 @@
 // Aplica una operación de sincronización validada contra PostgreSQL.
 //
 // Estrategia de conflictos para entidades mutables (Species, Pond,
-// FishBatch) — IMPLEMENTATION_PLAN.md §6.4: last-write-wins por número de
-// versión. Si la versión que trae el cliente no es más nueva que la que
-// ya existe en el servidor, la escritura se descarta sin sobrescribir
-// nada (nunca se pierde silenciosamente un cambio: queda registrado como
-// "conflict" en SyncOperation, visible para diagnóstico).
+// FishBatch, Feed y, desde la Fase 4, Task) — IMPLEMENTATION_PLAN.md
+// §6.4: last-write-wins por número de versión. Si la versión que trae el
+// cliente no es más nueva que la que ya existe en el servidor, la
+// escritura se descarta sin sobrescribir nada (nunca se pierde
+// silenciosamente un cambio: queda registrado como "conflict" en
+// SyncOperation, visible para diagnóstico).
 //
-// Stocking y FishTransfer son eventos append-only sin versión: su único
-// "conflicto" posible es de balance, no de edición concurrente — ver
-// applyFishTransferOperation y OFFLINE_SYNC.md §8 (multi-dispositivo).
+// Stocking, FishTransfer y (desde la Fase 4) WaterQualityRecord son
+// eventos append-only sin versión: su único "conflicto" posible sería de
+// balance, no de edición concurrente — ver applyFishTransferOperation y
+// OFFLINE_SYNC.md §8 (multi-dispositivo). WaterQualityRecord no valida
+// ningún balance (§1: es solo un historial de mediciones).
 import type { Prisma } from "@/generated/prisma/client";
 import { getBatchPondBalance } from "@/lib/domain/batchLedger";
 import { getFeedStock, isFeedExitMovement } from "@/lib/domain/feedLedger";
@@ -27,6 +30,8 @@ import type {
   SamplingPayload,
   SpeciesPayload,
   StockingPayload,
+  TaskPayload,
+  WaterQualityRecordPayload,
 } from "@/lib/validation/sync";
 
 export type ApplyResult = "applied" | "conflict";
@@ -242,6 +247,53 @@ function samplingData(payload: SamplingPayload) {
     deviceId: payload.deviceId,
     createdAt: new Date(payload.createdAt),
     deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+  };
+}
+
+function waterQualityRecordData(payload: WaterQualityRecordPayload) {
+  return {
+    id: payload.id,
+    pondId: payload.pondId,
+    batchId: payload.batchId,
+    date: new Date(payload.date),
+    time: payload.time,
+    temperatureC: payload.temperatureC,
+    ph: payload.ph,
+    dissolvedOxygenMgL: payload.dissolvedOxygenMgL,
+    transparencyCm: payload.transparencyCm,
+    ammoniaMgL: payload.ammoniaMgL,
+    nitriteMgL: payload.nitriteMgL,
+    alkalinityMgL: payload.alkalinityMgL,
+    waterLevelCm: payload.waterLevelCm,
+    notes: payload.notes,
+    responsibleName: payload.responsibleName,
+    deviceId: payload.deviceId,
+    createdAt: new Date(payload.createdAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+  };
+}
+
+function taskData(payload: TaskPayload) {
+  return {
+    id: payload.id,
+    title: payload.title,
+    description: payload.description,
+    dueDate: new Date(payload.dueDate),
+    dueTime: payload.dueTime,
+    priority: payload.priority,
+    status: payload.status,
+    pondId: payload.pondId,
+    batchId: payload.batchId,
+    assignedToName: payload.assignedToName,
+    notes: payload.notes,
+    completedAt: payload.completedAt ? new Date(payload.completedAt) : null,
+    createdAt: new Date(payload.createdAt),
+    updatedAt: new Date(payload.updatedAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+    version: payload.version,
+    deviceId: payload.deviceId,
+    createdBy: payload.createdBy,
+    updatedBy: payload.updatedBy,
   };
 }
 
@@ -594,6 +646,57 @@ async function applySamplingOperation(
 }
 
 /**
+ * Medición de calidad del agua (Fase 4, §1-§3): evento append-only, sin
+ * ningún tipo de validación de balance/stock — solo se re-valida lo que
+ * ya valida Zod (rangos físicos, §42: nunca confiar solo en el cliente).
+ */
+async function applyWaterQualityRecordOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "WaterQualityRecord" }>,
+): Promise<ApplyResult> {
+  const data = waterQualityRecordData(op.payload);
+  await tx.waterQualityRecord.upsert({ where: { id: op.entityId }, create: data, update: data });
+  return "applied";
+}
+
+/**
+ * Tarea (Fase 4, §18-§19, §34): a diferencia del resto del dominio de
+ * esta fase, es MUTABLE — mismo criterio de resolución de conflictos
+ * last-write-wins por número de versión que Species/Pond/Feed (§6 de
+ * OFFLINE_SYNC.md). Dos dispositivos editando la misma tarea offline
+ * (uno la completa, otro le cambia el título desde una versión antigua)
+ * nunca pierden el cambio en silencio: el que trae una versión igual o
+ * menor que la ya aplicada queda en conflicto, visible para revisión.
+ */
+async function applyTaskOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "Task" }>,
+): Promise<ApplyResult> {
+  const data = taskData(op.payload);
+
+  if (op.operation === "CREATE") {
+    await tx.task.create({ data });
+    return "applied";
+  }
+
+  const current = await tx.task.findUnique({ where: { id: op.entityId } });
+  if (!current) {
+    // El servidor nunca vio la creación original (todavía pendiente de
+    // sincronizar en otro lote) — se trata como una creación para no
+    // perder el dato, mismo criterio que Species/Pond/FishBatch/Feed.
+    await tx.task.create({ data });
+    return "applied";
+  }
+
+  if (data.version <= current.version) {
+    return "conflict";
+  }
+
+  await tx.task.update({ where: { id: op.entityId }, data });
+  return "applied";
+}
+
+/**
  * "Registrar alimentación" como una única operación de negocio atómica
  * (Fase 3.5, §2 del encargo): antes, el cliente enviaba dos operaciones
  * independientes (FeedingRecord CREATE + FeedInventoryMovement CREATE),
@@ -702,5 +805,9 @@ export async function applyOperation(
       return applyRegisterFeedingOperation(tx, op);
     case "CreateFeedWithInitialStock":
       return applyCreateFeedWithInitialStockOperation(tx, op);
+    case "WaterQualityRecord":
+      return applyWaterQualityRecordOperation(tx, op);
+    case "Task":
+      return applyTaskOperation(tx, op);
   }
 }
