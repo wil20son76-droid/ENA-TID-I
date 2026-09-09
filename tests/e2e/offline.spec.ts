@@ -54,7 +54,8 @@ test.describe.serial("Escenario offline obligatorio", () => {
     // Orden seguro por llaves foráneas: desde Fase 2, fish_transfers /
     // stockings / fish_batches referencian species y ponds.
     await queryDb(
-      'TRUNCATE "sync_operations", "fish_transfers", "stockings", "fish_batches", "ponds", "species"',
+      'TRUNCATE "sync_operations", "feeding_records", "mortality_records", "samplings", ' +
+        '"feed_inventory_movements", "feeds", "fish_transfers", "stockings", "fish_batches", "ponds", "species"',
     );
 
     browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium" });

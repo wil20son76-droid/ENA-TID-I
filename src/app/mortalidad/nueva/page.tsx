@@ -112,7 +112,7 @@ function NewMortalityForm() {
             className="rounded-lg border border-zinc-300 bg-white px-3 py-3 text-base focus:border-emerald-600 focus:outline-none focus:ring-1 focus:ring-emerald-600 dark:border-zinc-700 dark:bg-zinc-900 disabled:opacity-50"
           >
             <option value="">
-              {pondId ? "Selecciona un lote" : "Primero selecciona un estanque"}
+              {pondId ? "Selecciona un lote" : "Elige primero el paso anterior"}
             </option>
             {batches.map((b) => (
               <option key={b.id} value={b.id}>

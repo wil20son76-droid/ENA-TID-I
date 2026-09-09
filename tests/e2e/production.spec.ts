@@ -52,7 +52,8 @@ test.describe.serial("Producción piscícola offline (Fase 2)", () => {
 
   test.beforeAll(async () => {
     await queryDb(
-      'TRUNCATE "sync_operations", "fish_transfers", "stockings", "fish_batches", "ponds", "species"',
+      'TRUNCATE "sync_operations", "feeding_records", "mortality_records", "samplings", ' +
+        '"feed_inventory_movements", "feeds", "fish_transfers", "stockings", "fish_batches", "ponds", "species"',
     );
 
     browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium" });
