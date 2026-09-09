@@ -21,6 +21,8 @@ import type {
   StockingRecord,
   SyncMetaRecord,
   SyncQueueRecord,
+  TaskRecord,
+  WaterQualityRecordRecord,
 } from "./types";
 
 export class AppDatabase extends Dexie {
@@ -34,6 +36,8 @@ export class AppDatabase extends Dexie {
   feedingRecords!: EntityTable<FeedingRecordRecord, "id">;
   mortalityRecords!: EntityTable<MortalityRecordRecord, "id">;
   samplings!: EntityTable<SamplingRecord, "id">;
+  waterQualityRecords!: EntityTable<WaterQualityRecordRecord, "id">;
+  tasks!: EntityTable<TaskRecord, "id">;
   syncQueue!: EntityTable<SyncQueueRecord, "id">;
   syncMeta!: EntityTable<SyncMetaRecord, "key">;
 
@@ -79,6 +83,15 @@ export class AppDatabase extends Dexie {
       feedingRecords: "id, batchId, pondId, feedId, date, createdAt",
       mortalityRecords: "id, batchId, pondId, [batchId+pondId], date, createdAt",
       samplings: "id, batchId, pondId, [batchId+pondId], date, createdAt",
+    });
+
+    // Fase 4 (calidad del agua, alertas y planificación): igual criterio
+    // que v2/v3 — solo tablas nuevas, ninguna definición anterior se toca
+    // (probado en __tests__/schemaUpgrade.test.ts con datos de v3 ya
+    // presentes al abrir con este esquema).
+    this.version(4).stores({
+      waterQualityRecords: "id, pondId, batchId, [pondId+date], date, createdAt",
+      tasks: "id, dueDate, status, pondId, batchId, updatedAt",
     });
   }
 }

@@ -184,3 +184,100 @@ describe("Dexie: upgrade de esquema v2 -> v3 sin perder datos (Fase 3)", () => {
     upgradedDb.close();
   });
 });
+
+describe("Dexie: upgrade de esquema v3 -> v4 sin perder datos (Fase 4)", () => {
+  beforeEach(async () => {
+    await Dexie.delete(DB_NAME);
+  });
+
+  it("conserva un lote creado en v3 al reabrir con el esquema v4, y las tablas nuevas quedan disponibles", async () => {
+    class LegacyV3Database extends Dexie {
+      fishBatches!: EntityTable<{ id: string; code: string }, "id">;
+
+      constructor() {
+        super(DB_NAME);
+        this.version(1).stores({
+          species: "id, active, updatedAt",
+          ponds: "id, code, status, updatedAt",
+          syncQueue: "id, status, entityType, [entityType+entityId], createdAt",
+          syncMeta: "key",
+        });
+        this.version(2).stores({
+          ponds: "id, code, status, updatedAt, active",
+          fishBatches: "id, code, speciesId, status, updatedAt",
+          stockings: "id, batchId, pondId, [batchId+pondId], createdAt",
+          fishTransfers: "id, batchId, fromPondId, toPondId, createdAt",
+        });
+        this.version(3).stores({
+          feeds: "id, active, updatedAt",
+          feedInventoryMovements:
+            "id, feedId, [feedId+date], movementType, [sourceType+sourceId], createdAt",
+          feedingRecords: "id, batchId, pondId, feedId, date, createdAt",
+          mortalityRecords: "id, batchId, pondId, [batchId+pondId], date, createdAt",
+          samplings: "id, batchId, pondId, [batchId+pondId], date, createdAt",
+        });
+      }
+    }
+
+    const legacyDb = new LegacyV3Database();
+    await legacyDb.open();
+    await legacyDb.fishBatches.add({ id: "batch-legacy-2", code: "PAC-2026-002-0000" });
+    legacyDb.close();
+
+    const upgradedDb = new AppDatabase();
+    await upgradedDb.open();
+
+    const preserved = await upgradedDb.fishBatches.get("batch-legacy-2");
+    expect(preserved?.code).toBe("PAC-2026-002-0000");
+
+    expect(await upgradedDb.waterQualityRecords.count()).toBe(0);
+    expect(await upgradedDb.tasks.count()).toBe(0);
+
+    await upgradedDb.waterQualityRecords.add({
+      id: "wq-1",
+      pondId: "pond-1",
+      batchId: null,
+      date: new Date().toISOString(),
+      time: null,
+      temperatureC: 28,
+      ph: 7.2,
+      dissolvedOxygenMgL: 5.5,
+      transparencyCm: null,
+      ammoniaMgL: null,
+      nitriteMgL: null,
+      alkalinityMgL: null,
+      waterLevelCm: null,
+      notes: null,
+      responsibleName: null,
+      deviceId: "device-test",
+      createdAt: new Date().toISOString(),
+      deletedAt: null,
+    });
+    expect(await upgradedDb.waterQualityRecords.count()).toBe(1);
+
+    await upgradedDb.tasks.add({
+      id: "task-1",
+      title: "Revisar E01",
+      description: null,
+      dueDate: new Date().toISOString(),
+      dueTime: null,
+      priority: "NORMAL",
+      status: "PENDING",
+      pondId: "pond-1",
+      batchId: null,
+      assignedToName: null,
+      notes: null,
+      completedAt: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      deletedAt: null,
+      version: 1,
+      deviceId: "device-test",
+      createdBy: null,
+      updatedBy: null,
+    });
+    expect(await upgradedDb.tasks.count()).toBe(1);
+
+    upgradedDb.close();
+  });
+});

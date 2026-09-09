@@ -271,6 +271,60 @@ export interface SamplingRecord extends SamplingFields, EventAuditFields {
   id: string;
 }
 
+// --- Fase 4: calidad del agua, alertas y planificación ---
+
+/**
+ * Medición de calidad del agua (§1-§11 del encargo de Fase 4):
+ * evento append-only, igual criterio que Sampling/MortalityRecord — NUNCA
+ * un `pond.currentPh` mutable. Ver src/lib/domain/waterQuality.ts.
+ */
+export interface WaterQualityRecordFields {
+  pondId: string;
+  batchId: string | null;
+  date: string;
+  time: string | null;
+  temperatureC: number | null;
+  ph: number | null;
+  dissolvedOxygenMgL: number | null;
+  transparencyCm: number | null;
+  ammoniaMgL: number | null;
+  nitriteMgL: number | null;
+  alkalinityMgL: number | null;
+  waterLevelCm: number | null;
+  notes: string | null;
+  responsibleName: string | null;
+}
+
+export interface WaterQualityRecordRecord extends WaterQualityRecordFields, EventAuditFields {
+  id: string;
+}
+
+export type TaskStatus = "PENDING" | "COMPLETED" | "CANCELLED";
+export type TaskPriority = "LOW" | "NORMAL" | "HIGH" | "URGENT";
+
+/**
+ * Tarea manual (§18-§27 del encargo de Fase 4): MUTABLE, a diferencia
+ * del resto del dominio productivo — usa AuditFields (version/LWW) igual
+ * que Species/Pond/Feed, no EventAuditFields.
+ */
+export interface TaskFields {
+  title: string;
+  description: string | null;
+  dueDate: string;
+  dueTime: string | null;
+  priority: TaskPriority;
+  status: TaskStatus;
+  pondId: string | null;
+  batchId: string | null;
+  assignedToName: string | null;
+  notes: string | null;
+  completedAt: string | null;
+}
+
+export interface TaskRecord extends TaskFields, AuditFields {
+  id: string;
+}
+
 export type SyncEntityType =
   | "Species"
   | "Pond"
@@ -284,7 +338,10 @@ export type SyncEntityType =
   | "Sampling"
   // Comandos de negocio compuestos (Fase 3.5) — ver src/lib/validation/sync.ts.
   | "RegisterFeeding"
-  | "CreateFeedWithInitialStock";
+  | "CreateFeedWithInitialStock"
+  // Fase 4.
+  | "WaterQualityRecord"
+  | "Task";
 
 export type SyncOperationType = "CREATE" | "UPDATE" | "DELETE";
 
