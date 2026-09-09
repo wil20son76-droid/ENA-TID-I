@@ -109,8 +109,45 @@ async function main() {
       },
     });
 
+    // Catálogo de alimentos (Fase 3, §3 del encargo) con stock inicial
+    // opcional — mismo criterio que el lote: id/código fijos para que el
+    // seed sea idempotente.
+    const feeds = [
+      { key: "inicial-38", name: "Balanceado Inicial 38%", initialStockKg: 200 },
+      { key: "crecimiento-32", name: "Balanceado Crecimiento 32%", initialStockKg: 500 },
+      { key: "engorde-28", name: "Balanceado Engorde 28%", initialStockKg: 300 },
+    ];
+    const feedingDate = new Date();
+
+    for (const f of feeds) {
+      const feedId = `demo-feed-${f.key}`;
+      await prisma.feed.upsert({
+        where: { id: feedId },
+        update: {},
+        create: {
+          id: feedId,
+          name: f.name,
+          active: true,
+          deviceId: SEED_DEVICE_ID,
+        },
+      });
+
+      await prisma.feedInventoryMovement.upsert({
+        where: { id: `demo-feed-stock-${f.key}` },
+        update: {},
+        create: {
+          id: `demo-feed-stock-${f.key}`,
+          feedId,
+          movementType: "INITIAL_STOCK",
+          quantityKg: f.initialStockKg,
+          date: feedingDate,
+          deviceId: SEED_DEVICE_ID,
+        },
+      });
+    }
+
     console.log(
-      `Datos de demostración sembrados: ${species.length} especies, ${ponds.length} estanques, 1 lote (PAC-2026-001, ${initialQuantity} peces en E01).`,
+      `Datos de demostración sembrados: ${species.length} especies, ${ponds.length} estanques, 1 lote (PAC-2026-001, ${initialQuantity} peces en E01), ${feeds.length} alimentos con stock inicial.`,
     );
   } finally {
     await prisma.$disconnect();
