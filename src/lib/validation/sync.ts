@@ -16,6 +16,17 @@ export const syncEntityTypeSchema = z.enum([
   "FeedingRecord",
   "MortalityRecord",
   "Sampling",
+  // Comandos de negocio compuestos (Fase 3.5, §2/§9 del encargo): el
+  // cliente ya no envía "FeedingRecord"+"FeedInventoryMovement" (o
+  // "Feed"+"FeedInventoryMovement") como dos operaciones independientes
+  // para una misma acción de usuario — las envía como UNA sola, que el
+  // servidor aplica en una única transacción. Ver OFFLINE_SYNC.md §10.
+  // "FeedingRecord"/"FeedInventoryMovement"/"Feed" se mantienen arriba
+  // por compatibilidad con operaciones ya encoladas en dispositivos con
+  // la versión anterior de la app (§6 del encargo) y para el pull, que
+  // siempre entrega las entidades reales, nunca el comando que las creó.
+  "RegisterFeeding",
+  "CreateFeedWithInitialStock",
 ]);
 export const pondStatusSchema = z.enum([
   "EMPTY",
@@ -244,6 +255,47 @@ export const samplingPayloadSchema = z.object({
   deletedAt: z.iso.datetime().nullable(),
 });
 
+// Comandos de negocio compuestos (Fase 3.5). Su `id` es el de la
+// entidad PRINCIPAL que crean (el FeedingRecord / el Feed) — es también
+// el `entityId` de la operación, para que el resto del protocolo
+// (idempotencia por operationId, pull, etc.) no necesite distinguirlos
+// de una entidad simple.
+export const registerFeedingPayloadSchema = z.object({
+  id: z.uuid(),
+  movementId: z.uuid(),
+  batchId: z.uuid(),
+  pondId: z.uuid(),
+  feedId: z.uuid(),
+  date: z.iso.datetime(),
+  time: z.string().max(10).nullable(),
+  quantityKg: z.number().positive(),
+  shift: feedingShiftSchema.nullable(),
+  responsibleName: z.string().max(200).nullable(),
+  notes: z.string().max(2000).nullable(),
+  deviceId: z.string().min(1).max(200),
+  createdAt: z.iso.datetime(),
+  deletedAt: z.iso.datetime().nullable(),
+});
+
+export const createFeedWithInitialStockPayloadSchema = z.object({
+  id: z.uuid(),
+  name: z.string().min(1).max(200),
+  brand: z.string().max(200).nullable(),
+  proteinPercent: z.number().min(0).max(100).nullable(),
+  pelletSizeMm: z.number().nonnegative().nullable(),
+  bagWeightKg: z.number().nonnegative().nullable(),
+  defaultBagPrice: z.number().nonnegative().nullable(),
+  defaultCostPerKg: z.number().nonnegative().nullable(),
+  recommendedStage: z.string().max(200).nullable(),
+  notes: z.string().max(2000).nullable(),
+  minimumStockKg: z.number().nonnegative().nullable(),
+  active: z.boolean(),
+  ...auditFieldsSchema,
+  initialStockMovementId: z.uuid(),
+  initialStockKg: z.number().positive(),
+  initialStockDate: z.iso.datetime(),
+});
+
 export type SpeciesPayload = z.infer<typeof speciesPayloadSchema>;
 export type PondPayload = z.infer<typeof pondPayloadSchema>;
 export type FishBatchPayload = z.infer<typeof fishBatchPayloadSchema>;
@@ -254,6 +306,8 @@ export type FeedInventoryMovementPayload = z.infer<typeof feedInventoryMovementP
 export type FeedingRecordPayload = z.infer<typeof feedingRecordPayloadSchema>;
 export type MortalityRecordPayload = z.infer<typeof mortalityRecordPayloadSchema>;
 export type SamplingPayload = z.infer<typeof samplingPayloadSchema>;
+export type RegisterFeedingPayload = z.infer<typeof registerFeedingPayloadSchema>;
+export type CreateFeedWithInitialStockPayload = z.infer<typeof createFeedWithInitialStockPayloadSchema>;
 
 const basePushOperationSchema = z.object({
   // Id de la propia operación de sincronización — es la clave de
@@ -304,6 +358,14 @@ export const pushOperationSchema = z.discriminatedUnion("entityType", [
   basePushOperationSchema.extend({
     entityType: z.literal("Sampling"),
     payload: samplingPayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("RegisterFeeding"),
+    payload: registerFeedingPayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("CreateFeedWithInitialStock"),
+    payload: createFeedWithInitialStockPayloadSchema,
   }),
 ]);
 

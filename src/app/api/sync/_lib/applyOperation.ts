@@ -14,6 +14,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { getBatchPondBalance } from "@/lib/domain/batchLedger";
 import { getFeedStock, isFeedExitMovement } from "@/lib/domain/feedLedger";
 import type {
+  CreateFeedWithInitialStockPayload,
   FeedingRecordPayload,
   FeedInventoryMovementPayload,
   FeedPayload,
@@ -22,6 +23,7 @@ import type {
   MortalityRecordPayload,
   PondPayload,
   PushOperation,
+  RegisterFeedingPayload,
   SamplingPayload,
   SpeciesPayload,
   StockingPayload,
@@ -240,6 +242,88 @@ function samplingData(payload: SamplingPayload) {
     deviceId: payload.deviceId,
     createdAt: new Date(payload.createdAt),
     deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+  };
+}
+
+// --- Comandos de negocio compuestos (Fase 3.5) ---
+
+function feedingRecordDataFromRegisterPayload(payload: RegisterFeedingPayload) {
+  return {
+    id: payload.id,
+    batchId: payload.batchId,
+    pondId: payload.pondId,
+    feedId: payload.feedId,
+    date: new Date(payload.date),
+    time: payload.time,
+    quantityKg: payload.quantityKg,
+    shift: payload.shift,
+    responsibleName: payload.responsibleName,
+    notes: payload.notes,
+    deviceId: payload.deviceId,
+    createdAt: new Date(payload.createdAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+  };
+}
+
+function consumptionMovementDataFromRegisterPayload(payload: RegisterFeedingPayload) {
+  return {
+    id: payload.movementId,
+    feedId: payload.feedId,
+    movementType: "CONSUMPTION" as const,
+    quantityKg: payload.quantityKg,
+    unitCostPerKg: null,
+    totalCost: null,
+    date: new Date(payload.date),
+    sourceType: "FEEDING",
+    sourceId: payload.id,
+    notes: null,
+    deviceId: payload.deviceId,
+    createdAt: new Date(payload.createdAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+  };
+}
+
+function feedDataFromCreateWithStockPayload(payload: CreateFeedWithInitialStockPayload) {
+  return {
+    id: payload.id,
+    name: payload.name,
+    brand: payload.brand,
+    proteinPercent: payload.proteinPercent,
+    pelletSizeMm: payload.pelletSizeMm,
+    bagWeightKg: payload.bagWeightKg,
+    defaultBagPrice: payload.defaultBagPrice,
+    defaultCostPerKg: payload.defaultCostPerKg,
+    recommendedStage: payload.recommendedStage,
+    notes: payload.notes,
+    minimumStockKg: payload.minimumStockKg,
+    active: payload.active,
+    createdAt: new Date(payload.createdAt),
+    updatedAt: new Date(payload.updatedAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+    version: payload.version,
+    deviceId: payload.deviceId,
+    createdBy: payload.createdBy,
+    updatedBy: payload.updatedBy,
+  };
+}
+
+function initialStockMovementDataFromCreateWithStockPayload(
+  payload: CreateFeedWithInitialStockPayload,
+) {
+  return {
+    id: payload.initialStockMovementId,
+    feedId: payload.id,
+    movementType: "INITIAL_STOCK" as const,
+    quantityKg: payload.initialStockKg,
+    unitCostPerKg: null,
+    totalCost: null,
+    date: new Date(payload.initialStockDate),
+    sourceType: null,
+    sourceId: null,
+    notes: null,
+    deviceId: payload.deviceId,
+    createdAt: new Date(payload.createdAt),
+    deletedAt: null,
   };
 }
 
@@ -509,6 +593,86 @@ async function applySamplingOperation(
   return "applied";
 }
 
+/**
+ * "Registrar alimentación" como una única operación de negocio atómica
+ * (Fase 3.5, §2 del encargo): antes, el cliente enviaba dos operaciones
+ * independientes (FeedingRecord CREATE + FeedInventoryMovement CREATE),
+ * cada una en su propia transacción — un fallo entre las dos podía dejar
+ * un FeedingRecord sin su movimiento de inventario, o viceversa. Ahora
+ * ambas escrituras ocurren dentro de la MISMA transacción (la que ya
+ * envuelve a `applyOperation` en `push/route.ts`, junto con el registro
+ * de `SyncOperation`): si cualquier paso falla, Postgres revierte las
+ * dos, nunca queda una sin la otra. Ver OFFLINE_SYNC.md §10.
+ */
+async function applyRegisterFeedingOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "RegisterFeeding" }>,
+): Promise<ApplyResult> {
+  const payload = op.payload;
+
+  // 1. Validar existencia de Feed/FishBatch/Pond. Si alguno todavía no
+  // llegó (p. ej. el padre sigue en el outbox de otro lote de sync), se
+  // lanza un error real: la transacción se revierte por completo, la
+  // operación queda "error" (nunca "conflict" ni una escritura parcial)
+  // y el motor de sync la reintenta sola una vez el padre exista — ver
+  // OFFLINE_SYNC.md §10 (orden de sincronización) y §13 (retry sigue
+  // siendo necesario incluso con el orden explícito).
+  const [feed, batch, pond] = await Promise.all([
+    tx.feed.findUnique({ where: { id: payload.feedId } }),
+    tx.fishBatch.findUnique({ where: { id: payload.batchId } }),
+    tx.pond.findUnique({ where: { id: payload.pondId } }),
+  ]);
+  if (!feed || !batch || !pond) {
+    const missing = !feed ? "el alimento" : !batch ? "el lote" : "el estanque";
+    throw new Error(
+      `No se pudo registrar la alimentación: todavía no existe ${missing} en el servidor (pendiente de sincronizar).`,
+    );
+  }
+
+  // 2. Lock por feedId (mismo mecanismo que un FeedInventoryMovement de
+  // salida individual).
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${payload.feedId})::bigint)`;
+
+  // 3-4. Calcular y validar stock disponible.
+  const currentStock = await getCurrentFeedStock(tx, payload.feedId);
+  if (payload.quantityKg > currentStock) {
+    // Nunca se crea ni el FeedingRecord ni el movimiento: se retorna sin
+    // escribir nada, la transacción no tiene cambios que revertir.
+    return "conflict";
+  }
+
+  // 5-6. Crear FeedingRecord y FeedInventoryMovement juntos.
+  await tx.feedingRecord.create({ data: feedingRecordDataFromRegisterPayload(payload) });
+  await tx.feedInventoryMovement.create({
+    data: consumptionMovementDataFromRegisterPayload(payload),
+  });
+
+  // 7-8. El registro de SyncOperation y el commit los hace processOperation
+  // (push/route.ts), envolviendo esta misma llamada en su transacción.
+  return "applied";
+}
+
+/**
+ * "Crear alimento con stock inicial" (Fase 3.5, §9 del encargo): mismo
+ * criterio que `applyRegisterFeedingOperation` — Feed y su
+ * FeedInventoryMovement INITIAL_STOCK se crean en la misma transacción,
+ * nunca uno sin el otro. Sin stock inicial, el cliente sigue enviando un
+ * `Feed` CREATE simple (ver `applyFeedOperation`), no este comando.
+ */
+async function applyCreateFeedWithInitialStockOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "CreateFeedWithInitialStock" }>,
+): Promise<ApplyResult> {
+  const payload = op.payload;
+
+  await tx.feed.create({ data: feedDataFromCreateWithStockPayload(payload) });
+  await tx.feedInventoryMovement.create({
+    data: initialStockMovementDataFromCreateWithStockPayload(payload),
+  });
+
+  return "applied";
+}
+
 export async function applyOperation(
   tx: TransactionClient,
   op: PushOperation,
@@ -534,5 +698,9 @@ export async function applyOperation(
       return applyMortalityRecordOperation(tx, op);
     case "Sampling":
       return applySamplingOperation(tx, op);
+    case "RegisterFeeding":
+      return applyRegisterFeedingOperation(tx, op);
+    case "CreateFeedWithInitialStock":
+      return applyCreateFeedWithInitialStockOperation(tx, op);
   }
 }
