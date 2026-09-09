@@ -3,8 +3,9 @@
 // Fase 1 (base técnica y offline/sync): Species, Pond, SyncOperation.
 // Fase 2 (producción piscícola): FishBatch, Stocking, FishTransfer, y
 // campos nuevos en Species/Pond. Fase 3 (operación diaria): Feed,
-// FeedInventoryMovement, FeedingRecord, MortalityRecord, Sampling. El
-// resto del modelo de datos completo del dominio piscícola está
+// FeedInventoryMovement, FeedingRecord, MortalityRecord, Sampling.
+// Fase 4 (calidad del agua, alertas y planificación): WaterQualityRecord,
+// Task. El resto del modelo de datos completo del dominio piscícola está
 // documentado en IMPLEMENTATION_PLAN.md §4 y se implementará de forma
 // incremental en las siguientes fases.
 
@@ -85,6 +86,23 @@ enum MortalityCause {
   OTHER
 }
 
+/// Estado de una tarea (§18-§22 del encargo de Fase 4). A diferencia del
+/// resto del dominio productivo de esta app, Task SÍ es mutable (§19):
+/// se edita y se completa desde cualquier dispositivo, con el mismo
+/// versionado/conflicto last-write-wins que Species/Pond/Feed.
+enum TaskStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
 enum SyncOperationType {
   CREATE
   UPDATE
@@ -161,12 +179,14 @@ model Pond {
   createdBy String?
   updatedBy String?
 
-  stockings        Stocking[]
-  transfersFrom    FishTransfer[]    @relation("TransferFromPond")
-  transfersTo      FishTransfer[]    @relation("TransferToPond")
-  feedingRecords   FeedingRecord[]
-  mortalityRecords MortalityRecord[]
-  samplings        Sampling[]
+  stockings           Stocking[]
+  transfersFrom       FishTransfer[]       @relation("TransferFromPond")
+  transfersTo         FishTransfer[]       @relation("TransferToPond")
+  feedingRecords      FeedingRecord[]
+  mortalityRecords    MortalityRecord[]
+  samplings           Sampling[]
+  waterQualityRecords WaterQualityRecord[]
+  tasks               Task[]
 
   @@index([status])
   @@index([active])
@@ -203,11 +223,13 @@ model FishBatch {
   createdBy String?
   updatedBy String?
 
-  stockings        Stocking[]
-  transfers        FishTransfer[]
-  feedingRecords   FeedingRecord[]
-  mortalityRecords MortalityRecord[]
-  samplings        Sampling[]
+  stockings           Stocking[]
+  transfers           FishTransfer[]
+  feedingRecords      FeedingRecord[]
+  mortalityRecords    MortalityRecord[]
+  samplings           Sampling[]
+  waterQualityRecords WaterQualityRecord[]
+  tasks               Task[]
 
   @@index([speciesId])
   @@index([status])
@@ -416,6 +438,81 @@ model Sampling {
   @@index([batchId, pondId])
   @@index([date])
   @@map("samplings")
+}
+
+/// Medición de calidad del agua (§1-§11 del encargo de Fase 4): evento
+/// append-only, mismo principio de ledger que el resto del dominio — NO
+/// existe `pond.currentPh`/`pond.currentTemperature`: la última medición,
+/// la tendencia y la alerta actual se derivan siempre de este historial
+/// (src/lib/domain/waterQuality.ts). Solo `pondId` es obligatorio además
+/// de la fecha; todo parámetro medido es opcional (§2) — el requisito
+/// mínimo (estanque + fecha + al menos un parámetro) se valida en la capa
+/// de aplicación, no en el esquema.
+model WaterQualityRecord {
+  id                 String     @id @default(uuid())
+  pondId             String
+  pond               Pond       @relation(fields: [pondId], references: [id])
+  batchId            String?
+  batch              FishBatch? @relation(fields: [batchId], references: [id])
+  date               DateTime
+  time               String?
+  temperatureC       Decimal?   @db.Decimal(4, 1)
+  ph                 Decimal?   @db.Decimal(4, 2)
+  dissolvedOxygenMgL Decimal?   @db.Decimal(5, 2)
+  transparencyCm     Decimal?   @db.Decimal(6, 1)
+  ammoniaMgL         Decimal?   @db.Decimal(6, 3)
+  nitriteMgL         Decimal?   @db.Decimal(6, 3)
+  alkalinityMgL      Decimal?   @db.Decimal(7, 2)
+  waterLevelCm       Decimal?   @db.Decimal(7, 1)
+  notes              String?
+  responsibleName    String?
+
+  deviceId  String
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([pondId])
+  @@index([batchId])
+  @@index([pondId, date])
+  @@index([date])
+  @@map("water_quality_records")
+}
+
+/// Tarea manual (§18-§27 del encargo de Fase 4): a diferencia del resto
+/// del dominio productivo, SÍ es mutable — se edita y se completa desde
+/// cualquier dispositivo (§19), con el mismo versionado/conflicto
+/// last-write-wins que Species/Pond/Feed (§6.4 de IMPLEMENTATION_PLAN.md).
+/// `pondId`/`batchId` son opcionales: una tarea puede no estar ligada a
+/// ningún estanque ni lote (§23, ej. "Comprar alimento crecimiento").
+model Task {
+  id             String       @id @default(uuid())
+  title          String
+  description    String?
+  dueDate        DateTime
+  dueTime        String?
+  priority       TaskPriority @default(NORMAL)
+  status         TaskStatus   @default(PENDING)
+  pondId         String?
+  pond           Pond?        @relation(fields: [pondId], references: [id])
+  batchId        String?
+  batch          FishBatch?   @relation(fields: [batchId], references: [id])
+  assignedToName String?
+  notes          String?
+  completedAt    DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  version   Int       @default(1)
+  deviceId  String
+  createdBy String?
+  updatedBy String?
+
+  @@index([dueDate])
+  @@index([status])
+  @@index([pondId])
+  @@index([batchId])
+  @@map("tasks")
 }
 
 /// Registro de operaciones de sincronización procesadas por el servidor.
