@@ -1,0 +1,82 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  getBatchDistribution,
+  getBatchPondBalance,
+  getBatchTotalBalance,
+  getPondOccupancy,
+} from "../batchLedger";
+
+const BATCH = "batch-1";
+const E01 = "pond-e01";
+const E02 = "pond-e02";
+const E03 = "pond-e03";
+
+describe("batchLedger", () => {
+  it("traslado total: todo el lote se mueve de un estanque a otro", () => {
+    const stockings = [{ batchId: BATCH, pondId: E01, quantity: 1000 }];
+    const transfers = [{ batchId: BATCH, fromPondId: E01, toPondId: E02, quantity: 1000 }];
+
+    expect(getBatchPondBalance(stockings, transfers, BATCH, E01)).toBe(0);
+    expect(getBatchPondBalance(stockings, transfers, BATCH, E02)).toBe(1000);
+    expect(getBatchTotalBalance(stockings, transfers, BATCH)).toBe(1000);
+  });
+
+  it("traslado parcial: el lote queda repartido entre dos estanques", () => {
+    const stockings = [{ batchId: BATCH, pondId: E01, quantity: 1000 }];
+    const transfers = [{ batchId: BATCH, fromPondId: E01, toPondId: E02, quantity: 400 }];
+
+    expect(getBatchPondBalance(stockings, transfers, BATCH, E01)).toBe(600);
+    expect(getBatchPondBalance(stockings, transfers, BATCH, E02)).toBe(400);
+    expect(getBatchDistribution(stockings, transfers, BATCH)).toEqual({
+      [E01]: 600,
+      [E02]: 400,
+    });
+    expect(getBatchTotalBalance(stockings, transfers, BATCH)).toBe(1000);
+  });
+
+  it("segundo traslado: el lote queda repartido entre tres estanques", () => {
+    const stockings = [{ batchId: BATCH, pondId: E01, quantity: 1000 }];
+    const transfers = [
+      { batchId: BATCH, fromPondId: E01, toPondId: E02, quantity: 400 },
+      { batchId: BATCH, fromPondId: E01, toPondId: E03, quantity: 200 },
+    ];
+
+    expect(getBatchDistribution(stockings, transfers, BATCH)).toEqual({
+      [E01]: 400,
+      [E02]: 400,
+      [E03]: 200,
+    });
+    expect(getBatchTotalBalance(stockings, transfers, BATCH)).toBe(1000);
+  });
+
+  it("el total del lote nunca cambia por traslados, solo por siembras", () => {
+    const stockings = [
+      { batchId: BATCH, pondId: E01, quantity: 600 },
+      { batchId: BATCH, pondId: E02, quantity: 400 },
+    ];
+    const transfers = [{ batchId: BATCH, fromPondId: E01, toPondId: E03, quantity: 100 }];
+
+    expect(getBatchTotalBalance(stockings, transfers, BATCH)).toBe(1000);
+  });
+
+  it("getPondOccupancy: un estanque puede alojar varios lotes", () => {
+    const stockings = [
+      { batchId: "batch-pacu", pondId: E01, quantity: 600 },
+      { batchId: "batch-tilapia", pondId: E01, quantity: 500 },
+    ];
+
+    expect(getPondOccupancy(stockings, [], E01)).toEqual({
+      "batch-pacu": 600,
+      "batch-tilapia": 500,
+    });
+  });
+
+  it("un estanque que quedó en 0 no aparece en la distribución ni en la ocupación", () => {
+    const stockings = [{ batchId: BATCH, pondId: E01, quantity: 1000 }];
+    const transfers = [{ batchId: BATCH, fromPondId: E01, toPondId: E02, quantity: 1000 }];
+
+    expect(getBatchDistribution(stockings, transfers, BATCH)).toEqual({ [E02]: 1000 });
+    expect(getPondOccupancy(stockings, transfers, E01)).toEqual({});
+  });
+});

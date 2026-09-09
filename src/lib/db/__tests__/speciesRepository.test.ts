@@ -52,11 +52,11 @@ describe("speciesRepository", () => {
     const species = await createSpecies({ commonName: "Pacú" });
 
     const updated = await updateSpecies(species.id, {
-      targetWeightGrams: 900,
+      targetWeightKg: 0.9,
     });
 
     expect(updated.version).toBe(2);
-    expect(updated.targetWeightGrams).toBe(900);
+    expect(updated.targetWeightKg).toBe(0.9);
 
     const queue = await db.syncQueue.orderBy("createdAt").toArray();
     expect(queue).toHaveLength(2);

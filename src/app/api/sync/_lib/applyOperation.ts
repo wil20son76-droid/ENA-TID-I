@@ -1,12 +1,25 @@
 // Aplica una operación de sincronización validada contra PostgreSQL.
 //
-// Estrategia de conflictos (IMPLEMENTATION_PLAN.md §6.4): last-write-wins
-// por número de versión. Si la versión que trae el cliente no es más
-// nueva que la que ya existe en el servidor, la escritura se descarta sin
-// sobrescribir nada (nunca se pierde silenciosamente un cambio: queda
-// registrado como "conflict" en SyncOperation, visible para diagnóstico).
+// Estrategia de conflictos para entidades mutables (Species, Pond,
+// FishBatch) — IMPLEMENTATION_PLAN.md §6.4: last-write-wins por número de
+// versión. Si la versión que trae el cliente no es más nueva que la que
+// ya existe en el servidor, la escritura se descarta sin sobrescribir
+// nada (nunca se pierde silenciosamente un cambio: queda registrado como
+// "conflict" en SyncOperation, visible para diagnóstico).
+//
+// Stocking y FishTransfer son eventos append-only sin versión: su único
+// "conflicto" posible es de balance, no de edición concurrente — ver
+// applyFishTransferOperation y OFFLINE_SYNC.md §8 (multi-dispositivo).
 import type { Prisma } from "@/generated/prisma/client";
-import type { PondPayload, PushOperation, SpeciesPayload } from "@/lib/validation/sync";
+import { getBatchPondBalance } from "@/lib/domain/batchLedger";
+import type {
+  FishBatchPayload,
+  FishTransferPayload,
+  PondPayload,
+  PushOperation,
+  SpeciesPayload,
+  StockingPayload,
+} from "@/lib/validation/sync";
 
 export type ApplyResult = "applied" | "conflict";
 
@@ -18,16 +31,15 @@ function speciesData(payload: SpeciesPayload) {
     commonName: payload.commonName,
     scientificName: payload.scientificName,
     description: payload.description,
-    targetWeightGrams: payload.targetWeightGrams,
-    cultureDurationDays: payload.cultureDurationDays,
+    targetWeightKg: payload.targetWeightKg,
+    estimatedCycleDays: payload.estimatedCycleDays,
     minTemperatureC: payload.minTemperatureC,
     maxTemperatureC: payload.maxTemperatureC,
     minPh: payload.minPh,
     maxPh: payload.maxPh,
-    minDissolvedOxygen: payload.minDissolvedOxygen,
+    minDissolvedOxygenMgL: payload.minDissolvedOxygenMgL,
     expectedFcr: payload.expectedFcr,
-    expectedMortalityPct: payload.expectedMortalityPct,
-    notes: payload.notes,
+    expectedMortalityPercent: payload.expectedMortalityPercent,
     active: payload.active,
     createdAt: new Date(payload.createdAt),
     updatedAt: new Date(payload.updatedAt),
@@ -48,11 +60,15 @@ function pondData(payload: PondPayload) {
     lengthM: payload.lengthM,
     widthM: payload.widthM,
     averageDepthM: payload.averageDepthM,
-    surfaceM2: payload.surfaceM2,
-    volumeM3: payload.volumeM3,
-    location: payload.location,
+    areaM2: payload.areaM2,
+    areaSource: payload.areaSource,
+    estimatedVolumeM3: payload.estimatedVolumeM3,
+    volumeSource: payload.volumeSource,
+    capacityNotes: payload.capacityNotes,
+    locationNotes: payload.locationNotes,
     notes: payload.notes,
     status: payload.status,
+    active: payload.active,
     createdAt: new Date(payload.createdAt),
     updatedAt: new Date(payload.updatedAt),
     deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
@@ -60,6 +76,69 @@ function pondData(payload: PondPayload) {
     deviceId: payload.deviceId,
     createdBy: payload.createdBy,
     updatedBy: payload.updatedBy,
+  };
+}
+
+function fishBatchData(payload: FishBatchPayload) {
+  return {
+    id: payload.id,
+    code: payload.code,
+    speciesId: payload.speciesId,
+    supplierId: payload.supplierId,
+    purchaseDate: payload.purchaseDate ? new Date(payload.purchaseDate) : null,
+    initialStockingDate: new Date(payload.initialStockingDate),
+    initialQuantity: payload.initialQuantity,
+    initialAverageWeightG: payload.initialAverageWeightG,
+    initialBiomassKg: payload.initialBiomassKg,
+    fryCost: payload.fryCost,
+    targetWeightKg: payload.targetWeightKg,
+    expectedHarvestDate: payload.expectedHarvestDate ? new Date(payload.expectedHarvestDate) : null,
+    status: payload.status,
+    notes: payload.notes,
+    createdAt: new Date(payload.createdAt),
+    updatedAt: new Date(payload.updatedAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+    version: payload.version,
+    deviceId: payload.deviceId,
+    createdBy: payload.createdBy,
+    updatedBy: payload.updatedBy,
+  };
+}
+
+function stockingData(payload: StockingPayload) {
+  return {
+    id: payload.id,
+    batchId: payload.batchId,
+    pondId: payload.pondId,
+    date: new Date(payload.date),
+    quantity: payload.quantity,
+    averageWeightG: payload.averageWeightG,
+    biomassKg: payload.biomassKg,
+    responsibleName: payload.responsibleName,
+    notes: payload.notes,
+    deviceId: payload.deviceId,
+    createdAt: new Date(payload.createdAt),
+    updatedAt: new Date(payload.updatedAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+  };
+}
+
+function fishTransferData(payload: FishTransferPayload) {
+  return {
+    id: payload.id,
+    batchId: payload.batchId,
+    fromPondId: payload.fromPondId,
+    toPondId: payload.toPondId,
+    date: new Date(payload.date),
+    quantity: payload.quantity,
+    averageWeightG: payload.averageWeightG,
+    biomassKg: payload.biomassKg,
+    reason: payload.reason,
+    responsibleName: payload.responsibleName,
+    notes: payload.notes,
+    deviceId: payload.deviceId,
+    createdAt: new Date(payload.createdAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
   };
 }
 
@@ -118,6 +197,94 @@ async function applyPondOperation(
   return "applied";
 }
 
+async function applyFishBatchOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "FishBatch" }>,
+): Promise<ApplyResult> {
+  const data = fishBatchData(op.payload);
+
+  if (op.operation === "CREATE") {
+    await tx.fishBatch.create({ data });
+    return "applied";
+  }
+
+  const current = await tx.fishBatch.findUnique({ where: { id: op.entityId } });
+  if (!current) {
+    await tx.fishBatch.create({ data });
+    return "applied";
+  }
+
+  if (data.version <= current.version) {
+    return "conflict";
+  }
+
+  await tx.fishBatch.update({ where: { id: op.entityId }, data });
+  return "applied";
+}
+
+async function applyStockingOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "Stocking" }>,
+): Promise<ApplyResult> {
+  // Append-only en esta fase: el cliente solo envía CREATE. UPDATE/DELETE
+  // se soportan de forma defensiva (nunca confiar solo en el cliente, §59)
+  // para una futura corrección auditada (§25), sin semántica de versión
+  // porque no hay edición concurrente posible sobre un evento que nadie
+  // más está editando a la vez.
+  const data = stockingData(op.payload);
+  await tx.stocking.upsert({ where: { id: op.entityId }, create: data, update: data });
+  return "applied";
+}
+
+async function getCurrentPondBalance(
+  tx: TransactionClient,
+  batchId: string,
+  pondId: string,
+): Promise<number> {
+  const [stockings, transfers] = await Promise.all([
+    tx.stocking.findMany({
+      where: { batchId, deletedAt: null },
+      select: { batchId: true, pondId: true, quantity: true },
+    }),
+    tx.fishTransfer.findMany({
+      where: { batchId, deletedAt: null },
+      select: { batchId: true, fromPondId: true, toPondId: true, quantity: true },
+    }),
+  ]);
+  return getBatchPondBalance(stockings, transfers, batchId, pondId);
+}
+
+async function applyFishTransferOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "FishTransfer" }>,
+): Promise<ApplyResult> {
+  if (op.operation !== "CREATE") {
+    // Ver nota de applyStockingOperation: defensivo, sin semántica de
+    // versión, no lo ejerce la UI de esta fase.
+    const data = fishTransferData(op.payload);
+    await tx.fishTransfer.upsert({ where: { id: op.entityId }, create: data, update: data });
+    return "applied";
+  }
+
+  // Lock por lote (§16 del encargo — conflictos multi-dispositivo): dos
+  // traslados concurrentes del MISMO lote nunca deben poder leer el mismo
+  // balance "disponible" y ambos darlo por válido. El lock es de
+  // transacción (se libera solo al terminar esta tx, haga commit o
+  // rollback) y no bloquea traslados de otros lotes.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${op.payload.batchId})::bigint)`;
+
+  const available = await getCurrentPondBalance(tx, op.payload.batchId, op.payload.fromPondId);
+  if (op.payload.quantity > available) {
+    // Nunca se inventa una cantidad ni se permite un balance negativo
+    // (§15): la operación queda como conflicto, visible para revisión,
+    // el dato local del dispositivo no se pierde (sigue en su outbox).
+    return "conflict";
+  }
+
+  await tx.fishTransfer.create({ data: fishTransferData(op.payload) });
+  return "applied";
+}
+
 export async function applyOperation(
   tx: TransactionClient,
   op: PushOperation,
@@ -127,5 +294,11 @@ export async function applyOperation(
       return applySpeciesOperation(tx, op);
     case "Pond":
       return applyPondOperation(tx, op);
+    case "FishBatch":
+      return applyFishBatchOperation(tx, op);
+    case "Stocking":
+      return applyStockingOperation(tx, op);
+    case "FishTransfer":
+      return applyFishTransferOperation(tx, op);
   }
 }

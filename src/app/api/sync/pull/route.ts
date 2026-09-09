@@ -13,7 +13,13 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/server/prisma";
 import { pullQuerySchema } from "@/lib/validation/sync";
-import type { Pond, Species } from "@/generated/prisma/client";
+import type {
+  FishBatch,
+  FishTransfer,
+  Pond,
+  Species,
+  Stocking,
+} from "@/generated/prisma/client";
 
 function toNullableNumber(value: unknown): number | null {
   if (value === null || value === undefined) return null;
@@ -26,16 +32,15 @@ function serializeSpecies(species: Species) {
     commonName: species.commonName,
     scientificName: species.scientificName,
     description: species.description,
-    targetWeightGrams: toNullableNumber(species.targetWeightGrams),
-    cultureDurationDays: species.cultureDurationDays,
+    targetWeightKg: toNullableNumber(species.targetWeightKg),
+    estimatedCycleDays: species.estimatedCycleDays,
     minTemperatureC: toNullableNumber(species.minTemperatureC),
     maxTemperatureC: toNullableNumber(species.maxTemperatureC),
     minPh: toNullableNumber(species.minPh),
     maxPh: toNullableNumber(species.maxPh),
-    minDissolvedOxygen: toNullableNumber(species.minDissolvedOxygen),
+    minDissolvedOxygenMgL: toNullableNumber(species.minDissolvedOxygenMgL),
     expectedFcr: toNullableNumber(species.expectedFcr),
-    expectedMortalityPct: toNullableNumber(species.expectedMortalityPct),
-    notes: species.notes,
+    expectedMortalityPercent: toNullableNumber(species.expectedMortalityPercent),
     active: species.active,
     createdAt: species.createdAt.toISOString(),
     updatedAt: species.updatedAt.toISOString(),
@@ -56,11 +61,15 @@ function serializePond(pond: Pond) {
     lengthM: toNullableNumber(pond.lengthM),
     widthM: toNullableNumber(pond.widthM),
     averageDepthM: toNullableNumber(pond.averageDepthM),
-    surfaceM2: toNullableNumber(pond.surfaceM2),
-    volumeM3: toNullableNumber(pond.volumeM3),
-    location: pond.location,
+    areaM2: toNullableNumber(pond.areaM2),
+    areaSource: pond.areaSource,
+    estimatedVolumeM3: toNullableNumber(pond.estimatedVolumeM3),
+    volumeSource: pond.volumeSource,
+    capacityNotes: pond.capacityNotes,
+    locationNotes: pond.locationNotes,
     notes: pond.notes,
     status: pond.status,
+    active: pond.active,
     createdAt: pond.createdAt.toISOString(),
     updatedAt: pond.updatedAt.toISOString(),
     deletedAt: pond.deletedAt ? pond.deletedAt.toISOString() : null,
@@ -68,6 +77,69 @@ function serializePond(pond: Pond) {
     deviceId: pond.deviceId,
     createdBy: pond.createdBy,
     updatedBy: pond.updatedBy,
+  };
+}
+
+function serializeFishBatch(batch: FishBatch) {
+  return {
+    id: batch.id,
+    code: batch.code,
+    speciesId: batch.speciesId,
+    supplierId: batch.supplierId,
+    purchaseDate: batch.purchaseDate ? batch.purchaseDate.toISOString() : null,
+    initialStockingDate: batch.initialStockingDate.toISOString(),
+    initialQuantity: batch.initialQuantity,
+    initialAverageWeightG: toNullableNumber(batch.initialAverageWeightG) ?? 0,
+    initialBiomassKg: toNullableNumber(batch.initialBiomassKg) ?? 0,
+    fryCost: toNullableNumber(batch.fryCost),
+    targetWeightKg: toNullableNumber(batch.targetWeightKg),
+    expectedHarvestDate: batch.expectedHarvestDate ? batch.expectedHarvestDate.toISOString() : null,
+    status: batch.status,
+    notes: batch.notes,
+    createdAt: batch.createdAt.toISOString(),
+    updatedAt: batch.updatedAt.toISOString(),
+    deletedAt: batch.deletedAt ? batch.deletedAt.toISOString() : null,
+    version: batch.version,
+    deviceId: batch.deviceId,
+    createdBy: batch.createdBy,
+    updatedBy: batch.updatedBy,
+  };
+}
+
+function serializeStocking(stocking: Stocking) {
+  return {
+    id: stocking.id,
+    batchId: stocking.batchId,
+    pondId: stocking.pondId,
+    date: stocking.date.toISOString(),
+    quantity: stocking.quantity,
+    averageWeightG: toNullableNumber(stocking.averageWeightG) ?? 0,
+    biomassKg: toNullableNumber(stocking.biomassKg) ?? 0,
+    responsibleName: stocking.responsibleName,
+    notes: stocking.notes,
+    deviceId: stocking.deviceId,
+    createdAt: stocking.createdAt.toISOString(),
+    updatedAt: stocking.updatedAt.toISOString(),
+    deletedAt: stocking.deletedAt ? stocking.deletedAt.toISOString() : null,
+  };
+}
+
+function serializeFishTransfer(transfer: FishTransfer) {
+  return {
+    id: transfer.id,
+    batchId: transfer.batchId,
+    fromPondId: transfer.fromPondId,
+    toPondId: transfer.toPondId,
+    date: transfer.date.toISOString(),
+    quantity: transfer.quantity,
+    averageWeightG: toNullableNumber(transfer.averageWeightG),
+    biomassKg: toNullableNumber(transfer.biomassKg),
+    reason: transfer.reason,
+    responsibleName: transfer.responsibleName,
+    notes: transfer.notes,
+    deviceId: transfer.deviceId,
+    createdAt: transfer.createdAt.toISOString(),
+    deletedAt: transfer.deletedAt ? transfer.deletedAt.toISOString() : null,
   };
 }
 
@@ -91,16 +163,26 @@ export async function GET(request: Request) {
   const serverTime = new Date();
   const since = parsed.data.since ? new Date(parsed.data.since) : null;
 
-  const where = since ? { updatedAt: { gt: since } } : {};
+  const byUpdatedAt = since ? { updatedAt: { gt: since } } : {};
+  // FishTransfer no tiene updatedAt (es un evento append-only que nunca se
+  // edita desde la UI de esta fase, ver prisma/schema.prisma): su cursor
+  // incremental es createdAt.
+  const byCreatedAt = since ? { createdAt: { gt: since } } : {};
 
-  const [species, ponds] = await Promise.all([
-    prisma.species.findMany({ where, orderBy: { updatedAt: "asc" } }),
-    prisma.pond.findMany({ where, orderBy: { updatedAt: "asc" } }),
+  const [species, ponds, fishBatches, stockings, fishTransfers] = await Promise.all([
+    prisma.species.findMany({ where: byUpdatedAt, orderBy: { updatedAt: "asc" } }),
+    prisma.pond.findMany({ where: byUpdatedAt, orderBy: { updatedAt: "asc" } }),
+    prisma.fishBatch.findMany({ where: byUpdatedAt, orderBy: { updatedAt: "asc" } }),
+    prisma.stocking.findMany({ where: byUpdatedAt, orderBy: { updatedAt: "asc" } }),
+    prisma.fishTransfer.findMany({ where: byCreatedAt, orderBy: { createdAt: "asc" } }),
   ]);
 
   return NextResponse.json({
     species: species.map(serializeSpecies),
     ponds: ponds.map(serializePond),
+    fishBatches: fishBatches.map(serializeFishBatch),
+    stockings: stockings.map(serializeStocking),
+    fishTransfers: fishTransfers.map(serializeFishTransfer),
     serverTime: serverTime.toISOString(),
   });
 }

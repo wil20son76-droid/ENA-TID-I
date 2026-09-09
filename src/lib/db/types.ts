@@ -20,16 +20,15 @@ export interface SpeciesFields {
   commonName: string;
   scientificName: string | null;
   description: string | null;
-  targetWeightGrams: number | null;
-  cultureDurationDays: number | null;
+  targetWeightKg: number | null;
+  estimatedCycleDays: number | null;
   minTemperatureC: number | null;
   maxTemperatureC: number | null;
   minPh: number | null;
   maxPh: number | null;
-  minDissolvedOxygen: number | null;
+  minDissolvedOxygenMgL: number | null;
   expectedFcr: number | null;
-  expectedMortalityPct: number | null;
-  notes: string | null;
+  expectedMortalityPercent: number | null;
   active: boolean;
 }
 
@@ -45,6 +44,9 @@ export type PondStatus =
   | "CLEANING"
   | "MAINTENANCE";
 
+/** Ver src/lib/domain/pondGeometry.ts para la lógica calculado/manual. */
+export type GeometrySource = "CALCULATED" | "MANUAL";
+
 export interface PondFields {
   code: string;
   name: string;
@@ -52,18 +54,97 @@ export interface PondFields {
   lengthM: number | null;
   widthM: number | null;
   averageDepthM: number | null;
-  surfaceM2: number | null;
-  volumeM3: number | null;
-  location: string | null;
+  areaM2: number | null;
+  areaSource: GeometrySource;
+  estimatedVolumeM3: number | null;
+  volumeSource: GeometrySource;
+  capacityNotes: string | null;
+  locationNotes: string | null;
   notes: string | null;
   status: PondStatus;
+  active: boolean;
 }
 
 export interface PondRecord extends PondFields, AuditFields {
   id: string;
 }
 
-export type SyncEntityType = "Species" | "Pond";
+export type BatchStatus =
+  | "PLANNED"
+  | "STOCKED"
+  | "GROWING"
+  | "PRE_HARVEST"
+  | "PARTIAL_HARVEST"
+  | "HARVESTED"
+  | "CLOSED";
+
+export interface FishBatchFields {
+  code: string;
+  speciesId: string;
+  supplierId: string | null;
+  purchaseDate: string | null;
+  initialStockingDate: string;
+  initialQuantity: number;
+  initialAverageWeightG: number;
+  initialBiomassKg: number;
+  fryCost: number | null;
+  targetWeightKg: number | null;
+  expectedHarvestDate: string | null;
+  status: BatchStatus;
+  notes: string | null;
+}
+
+export interface FishBatchRecord extends FishBatchFields, AuditFields {
+  id: string;
+}
+
+/**
+ * Siembra: evento append-only (§8 del encargo de Fase 2). No lleva
+ * `version`/`createdBy`/`updatedBy` — nunca se edita desde la UI de esta
+ * fase, solo se crea; `deletedAt` queda preparado por si en el futuro se
+ * implementa una corrección auditada (§25).
+ */
+export interface StockingFields {
+  batchId: string;
+  pondId: string;
+  date: string;
+  quantity: number;
+  averageWeightG: number;
+  biomassKg: number;
+  responsibleName: string | null;
+  notes: string | null;
+}
+
+export interface StockingRecord extends StockingFields {
+  id: string;
+  deviceId: string;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+/** Traslado: evento append-only (§10-§11). Mismo criterio que Stocking. */
+export interface FishTransferFields {
+  batchId: string;
+  fromPondId: string;
+  toPondId: string;
+  date: string;
+  quantity: number;
+  averageWeightG: number | null;
+  biomassKg: number | null;
+  reason: string | null;
+  responsibleName: string | null;
+  notes: string | null;
+}
+
+export interface FishTransferRecord extends FishTransferFields {
+  id: string;
+  deviceId: string;
+  createdAt: string;
+  deletedAt: string | null;
+}
+
+export type SyncEntityType = "Species" | "Pond" | "FishBatch" | "Stocking" | "FishTransfer";
 
 export type SyncOperationType = "CREATE" | "UPDATE" | "DELETE";
 

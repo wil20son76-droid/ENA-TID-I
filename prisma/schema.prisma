@@ -1,11 +1,10 @@
-// Esquema Prisma — Fase 1 (base técnica y offline/sync).
+// Esquema Prisma.
 //
-// Solo se modelan las entidades mínimas necesarias para demostrar la
-// arquitectura offline-first y el motor de sincronización de extremo a
-// extremo (Species, Pond) más la pieza central de idempotencia del lado
-// servidor (SyncOperation). El resto del modelo de datos completo del
-// dominio piscícola está documentado en IMPLEMENTATION_PLAN.md §4 y se
-// implementará de forma incremental en las siguientes fases.
+// Fase 1 (base técnica y offline/sync): Species, Pond, SyncOperation.
+// Fase 2 (producción piscícola): FishBatch, Stocking, FishTransfer, y
+// campos nuevos en Species/Pond. El resto del modelo de datos completo
+// del dominio piscícola está documentado en IMPLEMENTATION_PLAN.md §4 y
+// se implementará de forma incremental en las siguientes fases.
 
 // Prisma 7 requiere el generador "prisma-client" (ESM/CJS configurable) con
 // una ruta de salida explícita, y ya no acepta la URL de conexión dentro de
@@ -31,6 +30,24 @@ enum PondStatus {
   MAINTENANCE
 }
 
+/// Modo de un campo geométrico del estanque (IMPLEMENTATION_PLAN.md §4 /
+/// src/lib/domain/pondGeometry.ts): "CALCULATED" se deriva automáticamente
+/// de las medidas; "MANUAL" lo fijó la persona y ya no se recalcula solo.
+enum GeometrySource {
+  CALCULATED
+  MANUAL
+}
+
+enum BatchStatus {
+  PLANNED
+  STOCKED
+  GROWING
+  PRE_HARVEST
+  PARTIAL_HARVEST
+  HARVESTED
+  CLOSED
+}
+
 enum SyncOperationType {
   CREATE
   UPDATE
@@ -47,21 +64,20 @@ enum SyncOperationStatus {
 /// Catálogo configurable de especies (§11 del plan). No se codifican
 /// especies fijas: el usuario puede crear, modificar y desactivar.
 model Species {
-  id                   String    @id @default(uuid())
-  commonName           String
-  scientificName       String?
-  description          String?
-  targetWeightGrams    Decimal?  @db.Decimal(10, 2)
-  cultureDurationDays  Int?
-  minTemperatureC      Decimal?  @db.Decimal(4, 1)
-  maxTemperatureC      Decimal?  @db.Decimal(4, 1)
-  minPh                Decimal?  @db.Decimal(4, 2)
-  maxPh                Decimal?  @db.Decimal(4, 2)
-  minDissolvedOxygen   Decimal?  @db.Decimal(5, 2)
-  expectedFcr          Decimal?  @db.Decimal(5, 2)
-  expectedMortalityPct Decimal?  @db.Decimal(5, 2)
-  notes                String?
-  active               Boolean   @default(true)
+  id                       String   @id @default(uuid())
+  commonName               String
+  scientificName           String?
+  description              String?
+  targetWeightKg           Decimal? @db.Decimal(10, 3)
+  estimatedCycleDays       Int?
+  minTemperatureC          Decimal? @db.Decimal(4, 1)
+  maxTemperatureC          Decimal? @db.Decimal(4, 1)
+  minPh                    Decimal? @db.Decimal(4, 2)
+  maxPh                    Decimal? @db.Decimal(4, 2)
+  minDissolvedOxygenMgL    Decimal? @db.Decimal(5, 2)
+  expectedFcr              Decimal? @db.Decimal(5, 2)
+  expectedMortalityPercent Decimal? @db.Decimal(5, 2)
+  active                   Boolean  @default(true)
 
   // Campos de auditoría/sincronización — presentes en toda entidad
   // sincronizable (IMPLEMENTATION_PLAN.md §4.1).
@@ -73,25 +89,32 @@ model Species {
   createdBy String?
   updatedBy String?
 
+  fishBatches FishBatch[]
+
   @@index([active])
   @@map("species")
 }
 
-/// Estanques (§12 del plan). Sin relación a Species todavía: esa relación
-/// productiva llega con FishBatch en la Fase 2.
+/// Estanques (§12 del plan; §3-§4 de la Fase 2). El área y el volumen
+/// pueden derivarse de las medidas o fijarse a mano — ver GeometrySource
+/// y src/lib/domain/pondGeometry.ts para la lógica exacta.
 model Pond {
-  id            String     @id @default(uuid())
-  code          String     @unique
-  name          String
-  type          String?
-  lengthM       Decimal?   @db.Decimal(8, 2)
-  widthM        Decimal?   @db.Decimal(8, 2)
-  averageDepthM Decimal?   @db.Decimal(8, 2)
-  surfaceM2     Decimal?   @db.Decimal(10, 2)
-  volumeM3      Decimal?   @db.Decimal(10, 2)
-  location      String?
-  notes         String?
-  status        PondStatus @default(EMPTY)
+  id                String         @id @default(uuid())
+  code              String         @unique
+  name              String
+  type              String?
+  lengthM           Decimal?       @db.Decimal(8, 2)
+  widthM            Decimal?       @db.Decimal(8, 2)
+  averageDepthM     Decimal?       @db.Decimal(8, 2)
+  areaM2            Decimal?       @db.Decimal(10, 2)
+  areaSource        GeometrySource @default(CALCULATED)
+  estimatedVolumeM3 Decimal?       @db.Decimal(10, 2)
+  volumeSource      GeometrySource @default(CALCULATED)
+  capacityNotes     String?
+  locationNotes     String?
+  notes             String?
+  status            PondStatus     @default(EMPTY)
+  active            Boolean        @default(true)
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -101,8 +124,106 @@ model Pond {
   createdBy String?
   updatedBy String?
 
+  stockings     Stocking[]
+  transfersFrom FishTransfer[] @relation("TransferFromPond")
+  transfersTo   FishTransfer[] @relation("TransferToPond")
+
   @@index([status])
+  @@index([active])
   @@map("ponds")
+}
+
+/// Lote productivo (§5 del encargo de Fase 2): un grupo de peces de una
+/// misma especie y siembra inicial. NO tiene un "currentPondId": dónde
+/// está el lote se deriva siempre de Stocking + FishTransfer (§9, §11,
+/// §13 — ver src/lib/domain/batchLedger.ts), porque un lote puede estar
+/// repartido entre varios estanques a la vez.
+model FishBatch {
+  id                    String      @id @default(uuid())
+  code                  String      @unique
+  speciesId             String
+  species               Species     @relation(fields: [speciesId], references: [id])
+  supplierId            String?
+  purchaseDate          DateTime?
+  initialStockingDate   DateTime
+  initialQuantity       Int
+  initialAverageWeightG Decimal     @db.Decimal(10, 2)
+  initialBiomassKg      Decimal     @db.Decimal(12, 3)
+  fryCost               Decimal?    @db.Decimal(12, 2)
+  targetWeightKg        Decimal?    @db.Decimal(10, 3)
+  expectedHarvestDate   DateTime?
+  status                BatchStatus @default(PLANNED)
+  notes                 String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  version   Int       @default(1)
+  deviceId  String
+  createdBy String?
+  updatedBy String?
+
+  stockings Stocking[]
+  transfers FishTransfer[]
+
+  @@index([speciesId])
+  @@index([status])
+  @@map("fish_batches")
+}
+
+/// Siembra (§8): evento append-only. Deja evidencia histórica de dónde y
+/// cuándo entró cada lote — nunca se representa solo como
+/// "FishBatch.pondId = E01", eso perdería trazabilidad (§9 del encargo).
+model Stocking {
+  id              String    @id @default(uuid())
+  batchId         String
+  batch           FishBatch @relation(fields: [batchId], references: [id])
+  pondId          String
+  pond            Pond      @relation(fields: [pondId], references: [id])
+  date            DateTime
+  quantity        Int
+  averageWeightG  Decimal   @db.Decimal(10, 2)
+  biomassKg       Decimal   @db.Decimal(12, 3)
+  responsibleName String?
+  notes           String?
+
+  deviceId  String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([batchId])
+  @@index([pondId])
+  @@index([batchId, pondId])
+  @@map("stockings")
+}
+
+/// Traslado (§10-§11): evento append-only. Soporta traslados parciales —
+/// un mismo lote puede quedar repartido entre origen y destino.
+model FishTransfer {
+  id              String    @id @default(uuid())
+  batchId         String
+  batch           FishBatch @relation(fields: [batchId], references: [id])
+  fromPondId      String
+  fromPond        Pond      @relation("TransferFromPond", fields: [fromPondId], references: [id])
+  toPondId        String
+  toPond          Pond      @relation("TransferToPond", fields: [toPondId], references: [id])
+  date            DateTime
+  quantity        Int
+  averageWeightG  Decimal?  @db.Decimal(10, 2)
+  biomassKg       Decimal?  @db.Decimal(12, 3)
+  reason          String?
+  responsibleName String?
+  notes           String?
+
+  deviceId  String
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([batchId])
+  @@index([fromPondId])
+  @@index([toPondId])
+  @@map("fish_transfers")
 }
 
 /// Registro de operaciones de sincronización procesadas por el servidor.
@@ -110,15 +231,15 @@ model Pond {
 /// misma operación de la cola local (mismo id) nunca vuelve a aplicar su
 /// efecto sobre las tablas de negocio.
 model SyncOperation {
-  id           String               @id @default(uuid())
-  operationId  String               @unique
+  id           String              @id @default(uuid())
+  operationId  String              @unique
   entityType   String
   entityId     String
   operation    SyncOperationType
   deviceId     String
   status       SyncOperationStatus
   errorMessage String?
-  processedAt  DateTime             @default(now())
+  processedAt  DateTime            @default(now())
 
   @@index([entityType, entityId])
   @@index([processedAt])
