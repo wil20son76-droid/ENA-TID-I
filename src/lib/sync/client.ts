@@ -1,7 +1,14 @@
 // Cliente HTTP delgado hacia /api/sync/push y /api/sync/pull. No contiene
 // lógica de reintentos ni de estado: eso vive en engine.ts. Este módulo
 // solo sabe hablar el protocolo (IMPLEMENTATION_PLAN.md §6.3).
-import type { PondRecord, SpeciesRecord, SyncQueueRecord } from "../db/types";
+import type {
+  FishBatchRecord,
+  FishTransferRecord,
+  PondRecord,
+  SpeciesRecord,
+  StockingRecord,
+  SyncQueueRecord,
+} from "../db/types";
 
 export type PushResultStatus = "applied" | "duplicate" | "conflict" | "error";
 
@@ -46,6 +53,9 @@ export async function pushOperations(
 export interface PullResponse {
   species: SpeciesRecord[];
   ponds: PondRecord[];
+  fishBatches: FishBatchRecord[];
+  stockings: StockingRecord[];
+  fishTransfers: FishTransferRecord[];
   serverTime: string;
 }
 

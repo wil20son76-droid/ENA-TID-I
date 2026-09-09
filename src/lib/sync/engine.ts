@@ -128,14 +128,31 @@ async function pullAndMerge(): Promise<void> {
   const since = await getLastSyncedAt();
   const response = await pullChanges(since);
 
-  await db.transaction("rw", db.species, db.ponds, async () => {
-    for (const species of response.species) {
-      await db.species.put(species);
-    }
-    for (const pond of response.ponds) {
-      await db.ponds.put(pond);
-    }
-  });
+  await db.transaction(
+    "rw",
+    db.species,
+    db.ponds,
+    db.fishBatches,
+    db.stockings,
+    db.fishTransfers,
+    async () => {
+      for (const species of response.species) {
+        await db.species.put(species);
+      }
+      for (const pond of response.ponds) {
+        await db.ponds.put(pond);
+      }
+      for (const batch of response.fishBatches) {
+        await db.fishBatches.put(batch);
+      }
+      for (const stocking of response.stockings) {
+        await db.stockings.put(stocking);
+      }
+      for (const transfer of response.fishTransfers) {
+        await db.fishTransfers.put(transfer);
+      }
+    },
+  );
 
   await setLastSyncedAt(response.serverTime);
 }

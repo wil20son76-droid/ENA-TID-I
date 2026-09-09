@@ -13,13 +13,23 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 function emptyPullResponse() {
-  return { species: [], ponds: [], serverTime: new Date().toISOString() };
+  return {
+    species: [],
+    ponds: [],
+    fishBatches: [],
+    stockings: [],
+    fishTransfers: [],
+    serverTime: new Date().toISOString(),
+  };
 }
 
 describe("runSync", () => {
   beforeEach(async () => {
     await db.species.clear();
     await db.ponds.clear();
+    await db.fishBatches.clear();
+    await db.stockings.clear();
+    await db.fishTransfers.clear();
     await db.syncQueue.clear();
     await db.syncMeta.clear();
     vi.restoreAllMocks();
@@ -185,6 +195,9 @@ describe("runSync", () => {
           },
         ],
         ponds: [],
+        fishBatches: [],
+        stockings: [],
+        fishTransfers: [],
         serverTime: now,
       });
     });
@@ -197,5 +210,94 @@ describe("runSync", () => {
 
     const queue = await db.syncQueue.toArray();
     expect(queue).toHaveLength(0); // el registro remoto no generó una entrada de outbox
+  });
+
+  it("pull también aplica FishBatch/Stocking/FishTransfer remotos (Fase 2)", async () => {
+    const now = new Date().toISOString();
+    const batchId = crypto.randomUUID();
+    const stockingId = crypto.randomUUID();
+    const transferId = crypto.randomUUID();
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/sync/push")) {
+        return jsonResponse({ results: [], serverTime: now });
+      }
+      return jsonResponse({
+        species: [],
+        ponds: [],
+        fishBatches: [
+          {
+            id: batchId,
+            code: "PAC-2026-001-0000",
+            speciesId: "species-x",
+            supplierId: null,
+            purchaseDate: null,
+            initialStockingDate: now,
+            initialQuantity: 1000,
+            initialAverageWeightG: 15,
+            initialBiomassKg: 15,
+            fryCost: null,
+            targetWeightKg: null,
+            expectedHarvestDate: null,
+            status: "STOCKED",
+            notes: null,
+            createdAt: now,
+            updatedAt: now,
+            deletedAt: null,
+            version: 1,
+            deviceId: "otro-dispositivo",
+            createdBy: null,
+            updatedBy: null,
+          },
+        ],
+        stockings: [
+          {
+            id: stockingId,
+            batchId,
+            pondId: "pond-x",
+            date: now,
+            quantity: 1000,
+            averageWeightG: 15,
+            biomassKg: 15,
+            responsibleName: null,
+            notes: null,
+            deviceId: "otro-dispositivo",
+            createdAt: now,
+            updatedAt: now,
+            deletedAt: null,
+          },
+        ],
+        fishTransfers: [
+          {
+            id: transferId,
+            batchId,
+            fromPondId: "pond-x",
+            toPondId: "pond-y",
+            date: now,
+            quantity: 400,
+            averageWeightG: null,
+            biomassKg: null,
+            reason: null,
+            responsibleName: null,
+            notes: null,
+            deviceId: "otro-dispositivo",
+            createdAt: now,
+            deletedAt: null,
+          },
+        ],
+        serverTime: now,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runSync();
+
+    expect((await db.fishBatches.get(batchId))?.code).toBe("PAC-2026-001-0000");
+    expect((await db.stockings.get(stockingId))?.quantity).toBe(1000);
+    expect((await db.fishTransfers.get(transferId))?.quantity).toBe(400);
+
+    const queue = await db.syncQueue.toArray();
+    expect(queue).toHaveLength(0);
   });
 });
