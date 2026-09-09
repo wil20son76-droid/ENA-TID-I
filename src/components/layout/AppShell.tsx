@@ -8,8 +8,14 @@ import { SyncStatusBadge } from "@/components/sync/SyncStatusBadge";
 const NAV_ITEMS = [
   { href: "/", label: "Inicio", icon: "🏠" },
   { href: "/especies", label: "Especies", icon: "🐟" },
+  { href: "/lotes", label: "Lotes", icon: "📦" },
   { href: "/estanques", label: "Estanques", icon: "🌊" },
 ] as const;
+
+function isActive(pathname: string, href: string): boolean {
+  if (href === "/") return pathname === "/";
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
 
 function NavLink({
   href,
@@ -65,7 +71,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               href={item.href}
               label={item.label}
               icon={item.icon}
-              active={pathname === item.href}
+              active={isActive(pathname, item.href)}
             />
           ))}
         </div>

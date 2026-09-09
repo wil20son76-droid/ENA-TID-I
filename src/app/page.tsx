@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useLiveQuery } from "dexie-react-hooks";
 
+import { getBatchTotalBalance } from "@/lib/domain/batchLedger";
 import { db } from "@/lib/db/schema";
 
 function StatCard({
@@ -28,17 +29,36 @@ function StatCard({
 }
 
 export default function DashboardPage() {
-  const activeSpeciesCount =
-    useLiveQuery(async () => {
-      const all = await db.species.toArray();
-      return all.filter((s) => s.active && !s.deletedAt).length;
-    }, []) ?? 0;
+  const data = useLiveQuery(async () => {
+    const [species, ponds, batches, stockings, transfers] = await Promise.all([
+      db.species.toArray(),
+      db.ponds.toArray(),
+      db.fishBatches.toArray(),
+      db.stockings.toArray(),
+      db.fishTransfers.toArray(),
+    ]);
 
-  const activePondsCount =
-    useLiveQuery(async () => {
-      const all = await db.ponds.toArray();
-      return all.filter((p) => !p.deletedAt).length;
-    }, []) ?? 0;
+    const activeBatches = batches.filter((b) => !b.deletedAt);
+    const livingFish = activeBatches.reduce(
+      (sum, batch) => sum + getBatchTotalBalance(stockings, transfers, batch.id),
+      0,
+    );
+    const initialBiomassKg = activeBatches.reduce((sum, batch) => sum + batch.initialBiomassKg, 0);
+
+    return {
+      activeSpeciesCount: species.filter((s) => s.active && !s.deletedAt).length,
+      activePondsCount: ponds.filter((p) => !p.deletedAt).length,
+      activeBatchesCount: activeBatches.length,
+      livingFish,
+      initialBiomassKg,
+    };
+  }, []);
+
+  const activeSpeciesCount = data?.activeSpeciesCount ?? 0;
+  const activePondsCount = data?.activePondsCount ?? 0;
+  const activeBatchesCount = data?.activeBatchesCount ?? 0;
+  const livingFish = data?.livingFish ?? 0;
+  const initialBiomassKg = data?.initialBiomassKg ?? 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -53,16 +73,24 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <StatCard label="Especies" value={activeSpeciesCount} href="/especies" />
-        <StatCard label="Estanques" value={activePondsCount} href="/estanques" />
+        <StatCard label="Estanques activos" value={activePondsCount} href="/estanques" />
+        <StatCard label="Lotes activos" value={activeBatchesCount} href="/lotes" />
+        <StatCard label="Peces sembrados" value={livingFish.toLocaleString("es")} href="/lotes" />
+        <StatCard
+          label="Biomasa inicial (kg)"
+          value={initialBiomassKg.toLocaleString("es", { maximumFractionDigits: 1 })}
+          href="/lotes"
+        />
       </div>
+
+      <StatCard label="Especies" value={activeSpeciesCount} href="/especies" />
 
       <div className="flex flex-col gap-2 rounded-xl border border-dashed border-zinc-300 p-4 text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
         <p>
-          Esta es la base técnica de la aplicación (Fase 1): especies y
-          estanques offline-first con sincronización automática. El resto del
-          ciclo productivo (siembras, alimentación, mortalidad, cosechas,
-          ventas…) se añade en las próximas fases.
+          Fase 2: especies, estanques, lotes, siembras y traslados
+          offline-first con sincronización automática. Alimentación,
+          mortalidad, muestreos, cosechas y ventas se añaden en las próximas
+          fases.
         </p>
       </div>
     </div>
