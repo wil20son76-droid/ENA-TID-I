@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSpecies } from "../../db/repositories/speciesRepository";
 import { db } from "../../db/schema";
 import { runSync } from "../engine";
+import { getSyncStatus } from "../status";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -129,6 +130,23 @@ describe("runSync", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     const queue = await db.syncQueue.toArray();
     expect(queue[0].status).toBe("pending");
+  });
+
+  it("un fallo real de red marca 'offline' aunque navigator.onLine siga en true", async () => {
+    // navigator.onLine puede seguir reportando true sin conectividad real
+    // (comprobado manualmente contra el navegador real con la red cortada:
+    // ver IMPLEMENTATION_PLAN.md §7). fetch() sí distingue esto: rechaza
+    // con un TypeError cuando la red falla de verdad, a diferencia de un
+    // error HTTP normal (4xx/5xx), que resuelve la promesa igual.
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runSync();
+
+    expect(getSyncStatus().connectivity).toBe("offline");
+    expect(getSyncStatus().lastError).toBeTruthy();
   });
 
   it("pull aplica cambios remotos a Dexie sin volver a encolarlos en el outbox", async () => {

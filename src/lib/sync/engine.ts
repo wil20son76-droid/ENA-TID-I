@@ -64,6 +64,17 @@ function chunk<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
+// `fetch()` solo rechaza su promesa por fallos de red reales (sin conexión,
+// DNS, CORS, conexión rechazada); una respuesta HTTP de error (4xx/5xx) la
+// resuelve igual con `response.ok === false`. Por eso un TypeError aquí es
+// la señal fiable de "no hay conexión real", más robusta que depender solo
+// de `navigator.onLine` (que en algunos entornos/navegadores puede seguir
+// reportando `true` sin conectividad real, como se observó verificando
+// esta misma función con la red cortada).
+function isNetworkError(error: unknown): boolean {
+  return error instanceof TypeError;
+}
+
 async function pushBatch(deviceId: string, batch: SyncQueueRecord[]): Promise<void> {
   if (batch.length === 0) return;
 
@@ -107,6 +118,9 @@ async function pushBatch(deviceId: string, batch: SyncQueueRecord[]): Promise<vo
     // de información — solo queda pendiente de un próximo intento.
     const message = error instanceof Error ? error.message : "Error de red al sincronizar.";
     await Promise.all(batch.map((item) => markError(item.id, message)));
+    if (isNetworkError(error)) {
+      setSyncStatus({ connectivity: "offline" });
+    }
   }
 }
 
@@ -169,7 +183,11 @@ export async function runSync(options: RunSyncOptions = {}): Promise<void> {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Error de sincronización.";
-    setSyncStatus({ state: "idle", lastError: message });
+    setSyncStatus({
+      state: "idle",
+      lastError: message,
+      connectivity: isNetworkError(error) ? "offline" : "online",
+    });
   } finally {
     isRunning = false;
   }

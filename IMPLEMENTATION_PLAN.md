@@ -77,7 +77,7 @@ flowchart LR
 | Validación | Zod (esquemas compartidos cliente/servidor) | Una sola fuente de verdad para reglas de negocio (§52) |
 | Base de datos servidor | PostgreSQL (Railway) | Relacional, transaccional, soporta Railway nativo |
 | ORM servidor | Prisma | Migraciones versionadas, tipado end-to-end |
-| PWA | `@serwist/next` (Workbox-based, mantenido activamente para App Router) | Cache de app shell, estrategia offline documentada |
+| PWA | Service worker propio, sin librería (ver §3.3 nota Serwist/Turbopack) | Cache de app shell, estrategia offline documentada |
 
 ### 3.3 Matriz de versiones (verificada antes de instalar)
 
@@ -95,7 +95,7 @@ Antes de tocar `package.json` se consultaron los dist-tags reales de npm (`npm v
 | `dexie` | **4.4.5** | `latest` | Estable |
 | `dexie-react-hooks` | **4.4.0** | `latest` | Estable, para `useLiveQuery` |
 | `zod` | **4.5.4** | `latest` | Estable (v4); se descartan `beta`/`canary` |
-| `@serwist/next` / `serwist` | **9.5.12** | `latest` | Sucesor mantenido de `next-pwa` (este último, en 5.6.0, lleva años sin actividad relevante); soporta Next `>=14.0.0` y TypeScript `>=5.0.0` |
+| ~~`@serwist/next`~~ | **descartado** (ver nota debajo) | `latest` era `9.5.12` | Se evaluó como sucesor mantenido de `next-pwa`, pero se descartó tras confirmar por lectura de su código fuente instalado que `withSerwistInit()` inyecta un hook `webpack()` en `next.config` — y Next.js 16 usa Turbopack por defecto tanto en `next dev` como en `next build`, fallando expresamente si detecta configuración de webpack no solicitada. El propio paquete lo advierte en tiempo de ejecución ("`@serwist/next` ... doesn't support Turbopack") y ofrece como alternativa `@serwist/turbopack`, marcado "experimental" — se descarta también por la regla de evitar dependencias experimentales sin necesidad técnica clara. Se implementa en su lugar un service worker propio (§7 de este documento), sin dependencias adicionales |
 | `eslint` | **9.39.5** (fallback confirmado; se probó 10.10.0 primero) | `maintenance` (9.x aún soportada) | Se intentó primero **10.10.0** (`latest`). `eslint-config-next@16.3.4` en teoría se diseñó para ESLint 10 (Flat Config por defecto), pero sus dependencias anidadas reales en el registro (`eslint-plugin-react@7.37.5`, `eslint-plugin-jsx-a11y@6.10.2`, `eslint-plugin-import@2.32.0`) declaran como máximo `eslint@^9.x` y al ejecutar `npx eslint .` fallan en tiempo de ejecución (`TypeError: contextOrFilename.getFilename is not a function` en `eslint-plugin-react`). No existe todavía ninguna versión publicada de esos plugins compatible con ESLint 10 (verificado con `npm view <pkg> peerDependencies`). Fallback justificado a **9.39.5**, la última 9.x estable, con la que el lint corre sin errores |
 | `eslint-config-next` | **16.3.4** | `latest` | Debe ir alineado a la versión exacta de `next` |
 | `vitest` | **5.0.0** | `latest` | Estable; requiere Node `^22.12 \|\| ^24 \|\| >=26` (cumplido) |
@@ -395,11 +395,19 @@ Más: "Última sincronización: dd/mm/aaaa hh:mm" y botón "Sincronizar ahora". 
 
 ## 7. PWA
 
-- `manifest.webmanifest`: nombre, iconos (192/512, maskable), `display: standalone`, `theme_color`, `start_url`.
-- Service worker vía `@serwist/next` (Workbox por debajo, mantenido para App Router de Next 14+): cachea el app shell (JS/CSS/rutas principales) con estrategia `StaleWhileRevalidate` para assets estáticos y `NetworkFirst` con fallback a caché para rutas de navegación.
+- `manifest.webmanifest`: se genera con la convención nativa de Next.js (`src/app/manifest.ts`, tipado con `MetadataRoute.Manifest`), no como archivo estático — Next lo sirve y lo enlaza automáticamente en `<head>`. Incluye nombre, iconos (192/512, con variante `maskable`), `display: standalone`, `theme_color`, `start_url`.
+- Iconos: no hay todavía diseño definitivo (§60/§76), así que se generan como placeholder propio mediante `ImageResponse` de `next/og` (`src/app/icons/[size]/route.tsx`) — una marca simple con el color de marca, sin depender de herramientas externas de generación de íconos ni de binarios.
+- **Service worker propio, sin librería** (`public/sw.js`, registrado desde un componente cliente). Se descartó `@serwist/next` durante la implementación: inyecta un hook `webpack()` en la configuración de Next, y Next.js 16 usa Turbopack por defecto en `next dev` **y** `next build`, lo cual rompe el build salvo que se fuerce `--webpack` en todo el proyecto (ver nota en §3.3). Un service worker de mano, usando únicamente la Cache API del navegador, evita ese conflicto por completo y además dificulta menos cumplir el requisito de documentar exactamente qué se cachea y por qué:
+  - Peticiones a `/_next/static/**` (JS/CSS con hash de contenido, inmutables para un build dado): estrategia *cache-first* — nunca cambian, así que cachearlas agresivamente no tiene riesgo de servir contenido obsoleto.
+  - Navegaciones de documento (`request.mode === "navigate"`): *network-first con fallback a caché* — se prioriza contenido fresco, pero si no hay red se sirve la última versión cacheada del shell en vez de la pantalla de error del navegador.
+  - Otras peticiones GET del mismo origen (manifest, iconos, fuentes): *stale-while-revalidate*.
+  - `/api/**` (incluido `/api/sync/*`) **nunca se intercepta**: siempre va directo a la red. Si falla por estar offline, el motor de sincronización ya lo maneja (§6.3) marcando la operación como reintentable; cachear estas respuestas rompería la idempotencia y la frescura de los datos.
+  - No hay una lista fija de precacheo de rutas: como es un service worker de mano (no hay paso de build que conozca los nombres de archivo con hash), el cache del app shell se llena orgánicamente con lo que el usuario ya visitó online, que es exactamente lo necesario para que la app siga funcionando offline tras el primer uso (§60).
 - No existe una "pantalla offline" bloqueante: si falta un recurso no crítico, se degrada; los datos siempre vienen de IndexedDB, nunca de un fetch a la API para renderizar.
 - Prompt discreto de instalación ("Instalar aplicación") usando el evento `beforeinstallprompt`, sin forzar.
-- Estrategia de actualización de versión: `skipWaiting` + aviso "Nueva versión disponible, recargar" controlado por el usuario (para no interrumpir un registro en curso).
+- Actualización de versión (Fase 1, simplificada): `self.skipWaiting()` en `install` + `self.clients.claim()` en `activate`, de forma que una nueva versión del service worker toma control en la siguiente carga sin intervención del usuario. El aviso interactivo "Nueva versión disponible, recargar" (que requiere coordinación por `postMessage` entre la página y el SW) se deja documentado como pendiente para una fase posterior, para no sobre-construir la infraestructura PWA antes de tener más pantallas que cachear.
+- **`navigator.onLine` no es del todo confiable** (verificado durante la Fase 1: en ciertos entornos puede seguir devolviendo `true` inmediatamente después de un corte de red real). El motor de sincronización (`src/lib/sync/engine.ts`) lo usa como primera señal rápida, pero además detecta un fallo de red real por el tipo de error que lanza `fetch()` (`TypeError`, a diferencia de una respuesta HTTP de error, que no lanza) y corrige el indicador de conectividad a partir de eso — así el badge "⚫ Sin conexión" es fiable incluso cuando `navigator.onLine` miente.
+- El badge de sincronización se renderiza con un valor neutro y estable durante la hidratación (usando el mismo patrón `useSyncExternalStore` con snapshot de servidor/cliente distintos, no un `useEffect` con `setState`) y solo muestra el estado real en el primer re-render posterior al montaje. Es necesario porque el HTML que el service worker sirve offline fue cacheado en una visita anterior con otro estado, y sin esta guarda React reporta un error de hidratación (recuperable, pero visible en consola) al notar la diferencia.
 
 ---
 
@@ -514,6 +522,8 @@ Cada fase cierra con: lint → typecheck → tests → build, antes de pasar a l
 - **Unitarias (Vitest)**: todas las fórmulas de §64 — peces actuales, biomasa, alimentación diaria recomendada, FCR, inventario, costo/kg, ventas, mortalidad %.
 - **Sincronización**: pruebas de no-duplicación al reenviar la misma operación, comportamiento ante error/reintento, aplicación de conflictos.
 - **E2E offline obligatorio (Playwright, §65/§80)**: escenario scripted que abre la app, sincroniza, corta la red (`context.setOffline(true)`), cierra/reabre la app, registra alimentación/mortalidad/muestreo/gasto, verifica persistencia tras reabrir offline, reconecta, sincroniza, y valida en Postgres que no hay duplicados. Este test es **bloqueante** antes de dar por cerrada la Fase 7.
+
+**Nota importante descubierta al verificar la Fase 1** (afecta a toda prueba offline futura): el comportamiento offline se debe verificar contra `next build` + `next start`, **nunca contra `next dev`**. El cliente de desarrollo de Turbopack (`next dev`) depende de una conexión WebSocket viva al servidor de desarrollo para completar la hidratación/HMR; al cortar la red con `context.setOffline(true)` y recargar, esa conexión falla y la aplicación se queda mostrando el HTML cacheado por el service worker sin hidratar nunca (los `useEffect` de React nunca llegan a ejecutarse), lo que parece un fallo grave de la app pero es enteramente un artefacto del modo desarrollo. Contra el build de producción real (lo que efectivamente se despliega en Railway) la hidratación ocurre con normalidad sin depender de ningún WebSocket.
 
 ---
 

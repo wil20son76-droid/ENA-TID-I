@@ -46,11 +46,6 @@ next-env.d.ts
 /test-results/
 /blob-report/
 
-# PWA - generado en build por @serwist/next a partir de src/app/sw.ts
-/public/sw.js
-/public/sw.js.map
-/public/swe-worker-*.js
-
 # base de datos local de desarrollo (contenedor efímero, no artefacto del proyecto)
 /.pgdata/
 
