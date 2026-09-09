@@ -270,4 +270,54 @@ describe("Ledger de peces: traslados vía /api/sync/push", () => {
     expect(totalStocked - totalOut).toBe(200);
     expect(totalStocked - totalOut).toBeGreaterThanOrEqual(0);
   });
+
+  it("§37 (Fase 3.5) confirma atomicidad real: un fallo de Postgres a mitad de la transacción revierte el traslado, sin dejar un SyncOperation huérfano", async () => {
+    // applyFishTransferOperation corre dentro de la MISMA transacción que
+    // registra el SyncOperation (push/route.ts, prisma.$transaction
+    // envolviendo ambos). Para confirmarlo con un fallo real (no una
+    // simulación): se planta de antemano un FishTransfer con el mismo id
+    // que usará la operación, así el INSERT de la transacción choca por
+    // violación de llave primaria y Postgres revierte todo — incluido el
+    // registro de SyncOperation, que nunca debe quedar como "applied" sin
+    // su traslado.
+    const deviceId = "device-a";
+    const { batchId, fromPondId, toPondId } = await setUpBatchInPond(deviceId, 600);
+
+    const transferId = randomUUID();
+    const payload = transferPayload({ batchId, fromPondId, toPondId, quantity: 100, deviceId });
+    await prisma.fishTransfer.create({
+      data: {
+        id: transferId,
+        batchId: payload.batchId,
+        fromPondId: payload.fromPondId,
+        toPondId: payload.toPondId,
+        date: new Date(payload.date),
+        quantity: payload.quantity,
+        averageWeightG: null,
+        biomassKg: null,
+        reason: null,
+        responsibleName: null,
+        notes: "fila plantada para forzar colisión de PK en el test de rollback",
+        deviceId: "test-setup",
+        createdAt: new Date(payload.createdAt),
+        deletedAt: null,
+      },
+    });
+
+    const result = await pushOne("FishTransfer", transferId, { ...payload, id: transferId }, deviceId);
+
+    expect(result.status).toBe("error"); // nunca "applied": el INSERT chocó de verdad
+    expect(result.error).toBeTruthy();
+
+    // Sigue existiendo exactamente el traslado plantado (1), nunca dos ni
+    // uno "medio aplicado".
+    const transfers = await prisma.fishTransfer.findMany({ where: { id: transferId } });
+    expect(transfers).toHaveLength(1);
+    expect(transfers[0].notes).toBe("fila plantada para forzar colisión de PK en el test de rollback");
+
+    // El registro de SyncOperation nunca queda "applied" para una
+    // operación cuya escritura de dominio en realidad falló.
+    const op = await prisma.syncOperation.findUnique({ where: { operationId: result.id } });
+    expect(op?.status).toBe("error");
+  });
 });

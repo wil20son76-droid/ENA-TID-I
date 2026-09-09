@@ -389,4 +389,51 @@ describe("Ledger de peces: mortalidad vía /api/sync/push", () => {
     expect(totalStocked - totalMortality).toBe(200);
     expect(totalStocked - totalMortality).toBeGreaterThanOrEqual(0);
   });
+
+  it("§37 (Fase 3.5) confirma atomicidad real: un fallo de Postgres a mitad de la transacción revierte la mortalidad, sin dejar un SyncOperation huérfano", async () => {
+    // Mismo criterio que la confirmación de FishTransfer: applyMortalityRecordOperation
+    // corre dentro de la misma transacción que registra el SyncOperation.
+    // Se planta de antemano un MortalityRecord con el mismo id que usará
+    // la operación para forzar una violación real de llave primaria.
+    const deviceId = "device-a";
+    const { batchId, pondId } = await setUpBatchInPond(deviceId, 600);
+
+    const mortalityId = randomUUID();
+    const payload = mortalityPayload({ batchId, pondId, quantity: 100, deviceId });
+    await prisma.mortalityRecord.create({
+      data: {
+        id: mortalityId,
+        batchId: payload.batchId,
+        pondId: payload.pondId,
+        date: new Date(payload.date),
+        quantity: payload.quantity,
+        estimatedAverageWeightG: null,
+        cause: "UNKNOWN",
+        notes: "fila plantada para forzar colisión de PK en el test de rollback",
+        responsibleName: null,
+        deviceId: "test-setup",
+        createdAt: new Date(payload.createdAt),
+        deletedAt: null,
+      },
+    });
+
+    const result = await pushOne(
+      "MortalityRecord",
+      mortalityId,
+      { ...payload, id: mortalityId },
+      deviceId,
+    );
+
+    expect(result.status).toBe("error"); // nunca "applied": el INSERT chocó de verdad
+    expect(result.error).toBeTruthy();
+
+    const mortalities = await prisma.mortalityRecord.findMany({ where: { id: mortalityId } });
+    expect(mortalities).toHaveLength(1);
+    expect(mortalities[0].notes).toBe(
+      "fila plantada para forzar colisión de PK en el test de rollback",
+    );
+
+    const op = await prisma.syncOperation.findUnique({ where: { operationId: result.id } });
+    expect(op?.status).toBe("error");
+  });
 });
