@@ -87,7 +87,7 @@ Antes de tocar `package.json` se consultaron los dist-tags reales de npm (`npm v
 |---|---|---|---|
 | `next` | **16.3.4** | `latest` (Active LTS) | Última estable de Next 16; `beta`/`canary`/`preview` descartados por ser pre-release |
 | `react` / `react-dom` | **19.2.8** | `latest` | Requerido por Next 16 (`peerDependencies: ^19.0.0`); versión estable, no `rc`/`canary` |
-| `typescript` | **7.0.2** | `latest` | Última estable (compilador nativo "tsc-go"). Compatible con Next 16 y `eslint-config-next` (`peerDependencies.typescript: >=3.3.1`) y con Prisma 7 (sin restricción de TS). **Riesgo documentado**: es una reescritura mayor reciente del compilador; si durante la Fase 1 aparecen incompatibilidades reales de tooling se hará fallback documentado a `5.9.3` (última de la línea JS clásica, también estable) |
+| `typescript` | **5.9.3** (fallback confirmado; se probó 7.0.2 primero) | `latest` es `7.0.2`, se usa `ts5.9`/`prev` | Se intentó primero la `latest` real (**7.0.2**, compilador nativo "tsc-go") por ser la estable más reciente. Al ejecutar `npx eslint .` sobre el proyecto ya scaffolded, `typescript-eslint` (dependencia de `eslint-config-next`) **abortó con error**: *"typescript-eslint does not support TS 7.0 [...] see tracking issue for support of TS >=7.1"*. Es una incompatibilidad real y confirmada por ejecución, no una precaución especulativa. Se hace fallback a **5.9.3**, última versión estable de la línea clásica del compilador, totalmente soportada por `eslint-config-next`, `@serwist/next` (peer `>=5.0.0`) y el resto del stack. Se revisará el salto a TS 7 cuando `typescript-eslint` publique soporte confirmado |
 | `@types/react` / `@types/react-dom` | **19.2.18 / 19.2.7** | `latest` | Alineadas a React 19.2.x |
 | `@types/node` | **^22.20.1** | rama `22.x` | Alineada a la versión de Node del entorno de ejecución (`v22.22.2`), no a la `latest` (26.x), para evitar tipos de APIs de una major de Node que no se está usando |
 | `tailwindcss` + `@tailwindcss/postcss` | **4.3.3** | `latest` | Tailwind v4 estable (CSS-first config); se descarta `next` (4.0.0 preview tag) |
@@ -96,7 +96,7 @@ Antes de tocar `package.json` se consultaron los dist-tags reales de npm (`npm v
 | `dexie-react-hooks` | **4.4.0** | `latest` | Estable, para `useLiveQuery` |
 | `zod` | **4.5.4** | `latest` | Estable (v4); se descartan `beta`/`canary` |
 | `@serwist/next` / `serwist` | **9.5.12** | `latest` | Sucesor mantenido de `next-pwa` (este último, en 5.6.0, lleva años sin actividad relevante); soporta Next `>=14.0.0` y TypeScript `>=5.0.0` |
-| `eslint` | **10.10.0** | `latest` | Estable; se descarta `next` (10.0.0-rc.2) |
+| `eslint` | **9.39.5** (fallback confirmado; se probó 10.10.0 primero) | `maintenance` (9.x aún soportada) | Se intentó primero **10.10.0** (`latest`). `eslint-config-next@16.3.4` en teoría se diseñó para ESLint 10 (Flat Config por defecto), pero sus dependencias anidadas reales en el registro (`eslint-plugin-react@7.37.5`, `eslint-plugin-jsx-a11y@6.10.2`, `eslint-plugin-import@2.32.0`) declaran como máximo `eslint@^9.x` y al ejecutar `npx eslint .` fallan en tiempo de ejecución (`TypeError: contextOrFilename.getFilename is not a function` en `eslint-plugin-react`). No existe todavía ninguna versión publicada de esos plugins compatible con ESLint 10 (verificado con `npm view <pkg> peerDependencies`). Fallback justificado a **9.39.5**, la última 9.x estable, con la que el lint corre sin errores |
 | `eslint-config-next` | **16.3.4** | `latest` | Debe ir alineado a la versión exacta de `next` |
 | `vitest` | **5.0.0** | `latest` | Estable; requiere Node `^22.12 \|\| ^24 \|\| >=26` (cumplido) |
 | `@playwright/test` | **1.63.0** | `latest` | Estable; el entorno de ejecución ya trae Chromium preinstalado (revisión `1194`), por lo que los tests E2E se lanzan con `executablePath` explícito en vez de descargar navegadores |
@@ -229,6 +229,16 @@ model FishBatch {
 }
 ```
 *(Se completará el resto de modelos siguiendo el mismo patrón en Fase 1; este documento fija el criterio, no el DDL final.)*
+
+#### 4.4.1 Nota de arquitectura: Prisma 7 y driver adapters
+
+Al implementar la Fase 1 se confirmó un cambio de arquitectura real de Prisma 7 (no cosmético) que afecta cómo se conecta la aplicación a PostgreSQL:
+
+- La URL de conexión **ya no va en `schema.prisma`** (el bloque `datasource` solo declara `provider = "postgresql"`); vive en **`prisma.config.ts`**, en la raíz del proyecto, cargada explícitamente con `dotenv` (Prisma 7 dejó de cargar `.env` automáticamente).
+- El generador por defecto pasó de `prisma-client-js` a **`prisma-client`**, que exige una ruta `output` explícita (aquí `src/generated/prisma`, importado como `@/generated/prisma/client`) y ya no se publica dentro de `node_modules`.
+- `PrismaClient` **requiere un driver adapter explícito**: para PostgreSQL, `@prisma/adapter-pg` sobre el driver `pg`. Ya no existe motor de conexión implícito (`new PrismaClient()` sin argumentos lanza error).
+
+Esto no cambia ningún principio del plan (offline-first, ledger, idempotencia): solo cambia cómo se instancia el cliente en `src/lib/server/prisma.ts` (patrón singleton con adapter) y cómo se configura la CLI. Se documenta aquí porque es información posterior a la fecha de entrenamiento de varios asistentes de IA y difiere de los tutoriales de Prisma 5/6 más comunes.
 
 ### 4.5 Espejo local (Dexie / IndexedDB)
 
