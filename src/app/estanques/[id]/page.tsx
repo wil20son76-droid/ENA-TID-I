@@ -12,7 +12,13 @@ import { applyPondGeometryPatch, resetToCalculated, type PondGeometryState } fro
 import { getEstimatedWeightForPond } from "@/lib/domain/sampling";
 import { calculateBiomassKg } from "@/lib/domain/biomass";
 import { formatCount, formatG, formatKg } from "@/lib/domain/format";
-import { MORTALITY_CAUSE_LABEL } from "@/lib/labels";
+import { MORTALITY_CAUSE_LABEL, WATER_QUALITY_SEVERITY_LABEL } from "@/lib/labels";
+import {
+  compareMeasurementRecency,
+  evaluateWaterQuality,
+  getLatestMeasurement,
+  isMeasurementStale,
+} from "@/lib/domain/waterQuality";
 
 const STATUS_LABEL: Record<string, string> = {
   EMPTY: "Vacío",
@@ -29,6 +35,7 @@ const TABS = [
   { key: "alimentacion", label: "Alimentación" },
   { key: "mortalidad", label: "Mortalidad" },
   { key: "muestreos", label: "Muestreos" },
+  { key: "agua", label: "Calidad del agua" },
   { key: "historial", label: "Historial" },
 ] as const;
 type TabKey = (typeof TABS)[number]["key"];
@@ -64,6 +71,10 @@ export default function PondDetailPage({ params }: PageProps<"/estanques/[id]">)
     [id],
   ) ?? [];
   const feeds = useLiveQuery(() => db.feeds.toArray(), []) ?? [];
+  const waterQualityRecords = useLiveQuery(
+    () => db.waterQualityRecords.where("pondId").equals(id).toArray(),
+    [id],
+  ) ?? [];
 
   const [tab, setTab] = useState<TabKey>("resumen");
   const [editing, setEditing] = useState(false);
@@ -127,6 +138,27 @@ export default function PondDetailPage({ params }: PageProps<"/estanques/[id]">)
     .filter((m) => !m.deletedAt)
     .reduce((sum, m) => sum + m.quantity, 0);
 
+  const activeWaterRecords = [...waterQualityRecords]
+    .filter((r) => !r.deletedAt)
+    .sort((a, b) => compareMeasurementRecency(b, a));
+  const latestWaterRecord = getLatestMeasurement(activeWaterRecords);
+  const speciesInPond = Object.keys(occupancy)
+    .map((batchId) => batchById.get(batchId))
+    .filter((b): b is NonNullable<typeof b> => !!b)
+    .map((b) => speciesById.get(b.speciesId))
+    .filter((s): s is NonNullable<typeof s> => !!s);
+  const waterAlerts = latestWaterRecord
+    ? evaluateWaterQuality(
+        {
+          temperatureC: latestWaterRecord.temperatureC,
+          ph: latestWaterRecord.ph,
+          dissolvedOxygenMgL: latestWaterRecord.dissolvedOxygenMgL,
+        },
+        speciesInPond,
+      )
+    : [];
+  const waterStale = isMeasurementStale(latestWaterRecord?.date ?? null);
+
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -158,7 +190,7 @@ export default function PondDetailPage({ params }: PageProps<"/estanques/[id]">)
         <span className="text-right font-medium tabular-nums">{formatCount(mortalityTotal)}</span>
       </div>
 
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2">
         <Link
           href={`/alimentacion/nueva?pondId=${id}`}
           className="rounded-lg bg-emerald-700 px-3 py-3 text-center text-sm font-medium text-white transition-colors hover:bg-emerald-800"
@@ -176,6 +208,12 @@ export default function PondDetailPage({ params }: PageProps<"/estanques/[id]">)
           className="rounded-lg bg-emerald-700 px-3 py-3 text-center text-sm font-medium text-white transition-colors hover:bg-emerald-800"
         >
           Registrar muestreo
+        </Link>
+        <Link
+          href={`/calidad-agua/nueva?pondId=${id}`}
+          className="rounded-lg bg-emerald-700 px-3 py-3 text-center text-sm font-medium text-white transition-colors hover:bg-emerald-800"
+        >
+          Registrar calidad del agua
         </Link>
       </div>
 
@@ -371,6 +409,82 @@ export default function PondDetailPage({ params }: PageProps<"/estanques/[id]">)
                     <span className="tabular-nums">{formatG(s.averageWeightG)}</span>
                   </li>
                 ))}
+            </ul>
+          )}
+        </section>
+      )}
+
+      {tab === "agua" && (
+        <section className="flex flex-col gap-3">
+          {waterStale && (
+            <p className="rounded-lg border border-dashed border-amber-400 bg-amber-50 p-3 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+              Sin medición reciente.
+            </p>
+          )}
+
+          {latestWaterRecord ? (
+            <div className="grid grid-cols-2 gap-2 rounded-lg border border-zinc-200 bg-white p-3 text-sm dark:border-zinc-800 dark:bg-zinc-900">
+              <span className="text-zinc-500">Última medición</span>
+              <span className="text-right font-medium">{formatDate(latestWaterRecord.date)}</span>
+              {latestWaterRecord.temperatureC != null && (
+                <>
+                  <span className="text-zinc-500">Temperatura</span>
+                  <span className="text-right font-medium tabular-nums">{latestWaterRecord.temperatureC} °C</span>
+                </>
+              )}
+              {latestWaterRecord.ph != null && (
+                <>
+                  <span className="text-zinc-500">pH</span>
+                  <span className="text-right font-medium tabular-nums">{latestWaterRecord.ph}</span>
+                </>
+              )}
+              {latestWaterRecord.dissolvedOxygenMgL != null && (
+                <>
+                  <span className="text-zinc-500">Oxígeno disuelto</span>
+                  <span className="text-right font-medium tabular-nums">
+                    {latestWaterRecord.dissolvedOxygenMgL} mg/L
+                  </span>
+                </>
+              )}
+            </div>
+          ) : (
+            <p className="rounded-lg border border-dashed border-zinc-300 p-4 text-center text-sm text-zinc-500 dark:border-zinc-700">
+              Todavía no hay mediciones de calidad del agua en este estanque.
+            </p>
+          )}
+
+          {waterAlerts.length > 0 && (
+            <div className="flex flex-col gap-2">
+              {waterAlerts.map((alert, index) => (
+                <span
+                  key={index}
+                  className={`rounded-lg px-3 py-2 text-sm ${
+                    alert.severity === "critical"
+                      ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+                      : "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                  }`}
+                >
+                  {WATER_QUALITY_SEVERITY_LABEL[alert.severity]} — {alert.message}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {activeWaterRecords.length > 0 && (
+            <ul className="flex flex-col gap-2 text-sm">
+              {activeWaterRecords.slice(0, 10).map((record) => (
+                <li
+                  key={record.id}
+                  className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-2 dark:border-zinc-800 dark:bg-zinc-900"
+                >
+                  <span>{formatDate(record.date)}</span>
+                  <span className="text-right text-xs text-zinc-500 dark:text-zinc-400">
+                    {record.temperatureC != null && `${record.temperatureC} °C `}
+                    {record.ph != null && `pH ${record.ph} `}
+                    {record.dissolvedOxygenMgL != null && `O₂ ${record.dissolvedOxygenMgL} mg/L`}
+                  </span>
+                </li>
+              ))}
             </ul>
           )}
         </section>

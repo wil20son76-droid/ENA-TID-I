@@ -6,6 +6,9 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { getBatchProductionSummary } from "@/lib/domain/productionSummary";
 import { getAllFeedStocks } from "@/lib/domain/feedLedger";
 import { formatCount, formatKg } from "@/lib/domain/format";
+import { evaluateWaterQuality, getLatestMeasurement, isMeasurementStale } from "@/lib/domain/waterQuality";
+import { classifyTask } from "@/lib/domain/task";
+import { getPondOccupancy } from "@/lib/db/repositories/ledgerQueries";
 import { db } from "@/lib/db/schema";
 
 function StatCard({
@@ -44,19 +47,33 @@ function isSameMonth(isoDateTime: string, reference: string): boolean {
 
 export default function DashboardPage() {
   const data = useLiveQuery(async () => {
-    const [species, ponds, batches, stockings, transfers, mortalities, samplings, feedings, feeds, movements] =
-      await Promise.all([
-        db.species.toArray(),
-        db.ponds.toArray(),
-        db.fishBatches.toArray(),
-        db.stockings.toArray(),
-        db.fishTransfers.toArray(),
-        db.mortalityRecords.toArray(),
-        db.samplings.toArray(),
-        db.feedingRecords.toArray(),
-        db.feeds.toArray(),
-        db.feedInventoryMovements.toArray(),
-      ]);
+    const [
+      species,
+      ponds,
+      batches,
+      stockings,
+      transfers,
+      mortalities,
+      samplings,
+      feedings,
+      feeds,
+      movements,
+      waterQualityRecords,
+      tasks,
+    ] = await Promise.all([
+      db.species.toArray(),
+      db.ponds.toArray(),
+      db.fishBatches.toArray(),
+      db.stockings.toArray(),
+      db.fishTransfers.toArray(),
+      db.mortalityRecords.toArray(),
+      db.samplings.toArray(),
+      db.feedingRecords.toArray(),
+      db.feeds.toArray(),
+      db.feedInventoryMovements.toArray(),
+      db.waterQualityRecords.toArray(),
+      db.tasks.toArray(),
+    ]);
 
     const activeBatches = batches.filter((b) => !b.deletedAt);
     let livingFish = 0;
@@ -96,6 +113,55 @@ export default function DashboardPage() {
       (f) => f.minimumStockKg != null && (stocks[f.id] ?? 0) <= f.minimumStockKg,
     ).length;
 
+    // Calidad del agua: alertas de la última medición de cada estanque
+    // activo, y estanques sin medición reciente (§17/§27 del encargo de
+    // Fase 4) — nunca derivado de un campo mutable, siempre del historial.
+    const activePonds = ponds.filter((p) => !p.deletedAt);
+    const activeWaterRecords = waterQualityRecords.filter((r) => !r.deletedAt);
+    const speciesById = new Map(species.map((s) => [s.id, s]));
+    const batchById = new Map(batches.map((b) => [b.id, b]));
+
+    let criticalAlerts = 0;
+    let warningAlerts = 0;
+    let staleWaterPondsCount = 0;
+    for (const pond of activePonds) {
+      const latest = getLatestMeasurement(activeWaterRecords.filter((r) => r.pondId === pond.id));
+      if (isMeasurementStale(latest?.date ?? null)) staleWaterPondsCount += 1;
+      if (!latest) continue;
+
+      const occupancy = await getPondOccupancy(pond.id);
+      const speciesRanges = Object.keys(occupancy)
+        .map((batchId) => batchById.get(batchId))
+        .filter((b): b is NonNullable<typeof b> => !!b)
+        .map((b) => speciesById.get(b.speciesId))
+        .filter((s): s is NonNullable<typeof s> => !!s);
+
+      const alerts = evaluateWaterQuality(
+        {
+          temperatureC: latest.temperatureC,
+          ph: latest.ph,
+          dissolvedOxygenMgL: latest.dissolvedOxygenMgL,
+        },
+        speciesRanges,
+      );
+      for (const alert of alerts) {
+        if (alert.severity === "critical") criticalAlerts += 1;
+        else warningAlerts += 1;
+      }
+    }
+
+    // Tareas: hoy/vencidas/próximas (§27), nunca contando completadas ni canceladas.
+    const activeTasks = tasks.filter((t) => !t.deletedAt);
+    let tasksToday = 0;
+    let tasksOverdue = 0;
+    let tasksUpcoming = 0;
+    for (const task of activeTasks) {
+      const bucket = classifyTask(task, today);
+      if (bucket === "today") tasksToday += 1;
+      else if (bucket === "overdue") tasksOverdue += 1;
+      else if (bucket === "upcoming") tasksUpcoming += 1;
+    }
+
     return {
       activeSpeciesCount: species.filter((s) => s.active && !s.deletedAt).length,
       activePondsCount: ponds.filter((p) => !p.deletedAt).length,
@@ -108,6 +174,12 @@ export default function DashboardPage() {
       feedThisMonth,
       totalFeedStockKg,
       lowStockFeedsCount,
+      criticalAlerts,
+      warningAlerts,
+      staleWaterPondsCount,
+      tasksToday,
+      tasksOverdue,
+      tasksUpcoming,
     };
   }, []);
 
@@ -122,6 +194,11 @@ export default function DashboardPage() {
   const feedThisMonth = data?.feedThisMonth ?? 0;
   const totalFeedStockKg = data?.totalFeedStockKg ?? 0;
   const lowStockFeedsCount = data?.lowStockFeedsCount ?? 0;
+  const waterAlertsCount = (data?.criticalAlerts ?? 0) + (data?.warningAlerts ?? 0);
+  const staleWaterPondsCount = data?.staleWaterPondsCount ?? 0;
+  const tasksToday = data?.tasksToday ?? 0;
+  const tasksOverdue = data?.tasksOverdue ?? 0;
+  const tasksUpcoming = data?.tasksUpcoming ?? 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -158,14 +235,29 @@ export default function DashboardPage() {
         <StatCard label="Alimentos bajo mínimo" value={lowStockFeedsCount} href="/alimentos" />
       </div>
 
+      <div className="grid grid-cols-2 gap-3">
+        <StatCard label="Alertas de agua" value={waterAlertsCount} href="/calidad-agua" />
+        <StatCard
+          label="Estanques sin medición reciente"
+          value={staleWaterPondsCount}
+          href="/calidad-agua"
+        />
+        <StatCard label="Tareas vencidas" value={tasksOverdue} href="/tareas" />
+        <StatCard label="Tareas hoy" value={tasksToday} href="/tareas" />
+      </div>
+
+      {tasksUpcoming > 0 && (
+        <StatCard label="Próximas tareas" value={tasksUpcoming} href="/tareas" />
+      )}
+
       <StatCard label="Especies" value={activeSpeciesCount} href="/especies" />
 
       <div className="flex flex-col gap-2 rounded-xl border border-dashed border-zinc-300 p-4 text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
         <p>
-          Fase 3: alimentación, inventario de alimento, mortalidad y
-          muestreos offline-first, integrados en el ledger de peces.
-          Calidad de agua, cosechas y ventas se añaden en las próximas
-          fases.
+          Fase 4: calidad del agua con alertas por especie, tareas y
+          calendario, offline-first, sobre el mismo ledger de peces y
+          alimento de las fases anteriores. Cosechas, ventas y
+          rentabilidad se añaden en las próximas fases.
         </p>
       </div>
     </div>

@@ -7,7 +7,13 @@ const OPTIONS = [
   { href: "/alimentacion/nueva", label: "Alimentación", icon: "🍽️" },
   { href: "/mortalidad/nueva", label: "Mortalidad", icon: "💀" },
   { href: "/muestreos/nuevo", label: "Muestreo", icon: "📏" },
+  { href: "/calidad-agua/nueva", label: "Calidad del agua", icon: "💧" },
 ] as const;
+
+/** Separado del grupo de registros de producción (§28 del encargo de
+ * Fase 4: "Separar + Nueva tarea si la UX queda más clara") — una tarea
+ * no es un registro de producción, es una acción a futuro. */
+const TASK_OPTION = { href: "/tareas/nueva", label: "Nueva tarea", icon: "📝" } as const;
 
 /**
  * Botón "+ Registrar" global (§38 del encargo de Fase 3): presente en
@@ -34,6 +40,15 @@ export function QuickRegisterButton() {
               {option.label}
             </Link>
           ))}
+          <div className="my-1 border-t border-zinc-200 dark:border-zinc-800" />
+          <Link
+            href={TASK_OPTION.href}
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+          >
+            <span aria-hidden="true">{TASK_OPTION.icon}</span>
+            {TASK_OPTION.label}
+          </Link>
         </div>
       )}
       <button
