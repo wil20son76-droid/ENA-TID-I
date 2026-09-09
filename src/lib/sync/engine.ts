@@ -27,6 +27,8 @@ import {
 } from "../db/repositories/syncQueueRepository";
 import type { SyncQueueRecord } from "../db/types";
 import { pullChanges, pushOperations } from "./client";
+import { getConflictMessage } from "./conflictMessages";
+import { selectReadyOperations } from "./priority";
 import { setSyncStatus } from "./status";
 
 const BATCH_SIZE = 50;
@@ -45,15 +47,22 @@ function isReadyForRetry(item: SyncQueueRecord, now: number, force: boolean): bo
   return now - lastAttemptMs >= backoffDelayMs(item.retryCount);
 }
 
+// Fase 3.5 (§10-§14): el orden de envío ya no depende solo de `createdAt`.
+// `selectReadyOperations` ordena por nivel de prioridad explícito
+// (catálogos antes que sus dependientes) y excluye las operaciones cuya
+// dependencia está actualmente en error, para no inundar al servidor con
+// hijos que sabemos que van a fallar mientras su padre siga fallando. Esto
+// no sustituye el backoff/reintento de `isReadyForRetry` — se aplica
+// después, solo sobre lo que ya está listo para intentarse.
 async function collectEligibleOperations(force: boolean): Promise<SyncQueueRecord[]> {
   const [pending, errored] = await Promise.all([
     listByStatus("pending"),
     listByStatus("error"),
   ]);
+  const all = [...pending, ...errored];
   const now = Date.now();
-  return [...pending, ...errored]
-    .filter((item) => isReadyForRetry(item, now, force))
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const readyForRetry = all.filter((item) => isReadyForRetry(item, now, force));
+  return selectReadyOperations(readyForRetry, all);
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -98,10 +107,11 @@ async function pushBatch(deviceId: string, batch: SyncQueueRecord[]): Promise<vo
           syncedIds.push(item.id);
           break;
         case "conflict":
-          await markError(
-            item.id,
-            "Conflicto: el servidor tiene una versión más reciente de este registro.",
-          );
+          // Mensaje específico por tipo de operación (§23 de Fase 3.5): un
+          // comando de negocio compuesto (RegisterFeeding, etc.) se
+          // presenta como UN incidente comprensible, nunca desglosado en
+          // sus escrituras internas.
+          await markError(item.id, getConflictMessage(item.entityType, item.payload));
           break;
         case "error":
           await markError(item.id, result.error ?? "Error al sincronizar en el servidor.");

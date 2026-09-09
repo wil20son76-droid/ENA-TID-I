@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createFishBatchWithStocking } from "../../db/repositories/fishBatchRepository";
+import { createFeedingWithConsumption } from "../../db/repositories/feedingRepository";
+import { createFeed } from "../../db/repositories/feedRepository";
+import { createPond } from "../../db/repositories/pondRepository";
 import { createSpecies } from "../../db/repositories/speciesRepository";
 import { db } from "../../db/schema";
 import { runSync } from "../engine";
@@ -136,6 +140,53 @@ describe("runSync", () => {
     expect(queue).toHaveLength(1);
     expect(queue[0].status).toBe("error");
     expect(queue[0].lastError).toMatch(/conflicto/i);
+  });
+
+  it("conflicto de una operación compuesta (RegisterFeeding): mensaje específico, no el genérico de versión (Fase 3.5 §23)", async () => {
+    const species = await createSpecies({ commonName: "Pacú" });
+    const pond = await createPond({ code: "E01", name: "Norte" });
+    const { batch } = await createFishBatchWithStocking({
+      speciesId: species.id,
+      pondId: pond.id,
+      initialStockingDate: "2026-09-10T00:00:00.000Z",
+      initialQuantity: 1000,
+      initialAverageWeightG: 15,
+    });
+    const feed = await createFeed({ name: "Crecimiento 32%", initialStockKg: 500 });
+    await db.syncQueue.clear(); // solo interesa la operación de alimentación
+
+    await createFeedingWithConsumption({
+      batchId: batch.id,
+      pondId: pond.id,
+      feedId: feed.id,
+      date: "2026-09-11T08:00:00.000Z",
+      quantityKg: 18,
+    });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/sync/push")) {
+        const before = await db.syncQueue.toArray();
+        return jsonResponse({
+          results: before.map((op) => ({ id: op.id, status: "conflict" })),
+          serverTime: new Date().toISOString(),
+        });
+      }
+      return jsonResponse(emptyPullResponse());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runSync();
+
+    const queue = await db.syncQueue.toArray();
+    expect(queue).toHaveLength(1);
+    expect(queue[0].status).toBe("error");
+    // Nunca el mensaje genérico de LWW, y nunca desglosado en dos errores
+    // (Feeding / Inventory): un único incidente comprensible.
+    expect(queue[0].lastError).toBe(
+      "No se pudo sincronizar la alimentación de 18 kg porque el stock disponible cambió desde otro dispositivo.",
+    );
+    expect(queue[0].lastError).not.toMatch(/versión más reciente/);
   });
 
   it("sin conexión: no intenta red y no cambia el estado de la cola", async () => {
