@@ -509,6 +509,7 @@ IMPLEMENTATION_PLAN.md
 | **1 — Base técnica** ✅ | Next.js/TS/Tailwind/Prisma/Postgres/Railway-ready, PWA base, Dexie + syncQueue, motor de sync mínimo (push/pull), layout y navegación, indicador de conexión | Se puede crear un registro offline de prueba y verlo sincronizado en Postgres al reconectar, sin duplicados |
 | **2 — Producción** ✅ | Species, Pond, FishBatch, Stocking, FishTransfer | Se puede crear especie → estanque → lote → siembra, todo offline |
 | **3 — Operación diaria** ✅ | FeedingRecord (+InventoryMovement vinculado), Feed/inventario, MortalityRecord, Sampling, cálculo de biomasa | Registro rápido de alimentación en ≤3 toques; stock e indicadores consistentes |
+| **3.5 — Hardening de consistencia** ✅ | Sin funcionalidad de negocio nueva: comandos de negocio compuestos atómicos (`RegisterFeeding`, `CreateFeedWithInitialStock`), orden de sync determinista por dependencias explícitas, corrección de recuperación tras fallos parciales, mensajes de conflicto específicos | "Registrar alimentación 18 kg" termina en el servidor en exactamente uno de dos estados — `FeedingRecord`+`FeedInventoryMovement` existen, o ninguno existe — nunca uno sin el otro, ante caída, reintento, respuesta perdida o concurrencia; probado contra PostgreSQL real |
 | **4 — Agua y planificación** | WaterQualityRecord + alertas por especie, Task, Calendario | Alertas visibles sin diagnosticar enfermedades; tareas offline |
 | **5 — Economía** | Supplier, Purchase, Expense, Customer, Harvest, Sale, rentabilidad por lote | Flujo cosecha→venta→rentabilidad correcto y trazable |
 | **6 — Analítica** | Dashboard avanzado, gráficos, FCR, informes filtrables | FCR documentado (fuente exacta de datos), "datos insuficientes" cuando corresponda |
@@ -536,6 +537,23 @@ el FCR se calculan siempre desde el historial, con "datos
 insuficientes" explícito en vez de resultados inventados. Detalle
 completo en `OFFLINE_SYNC.md` §9; decisiones de arquitectura
 específicas de la fase en `ARCHITECTURE.md` §4.2.
+
+**Fase 3.5 — completada.** Antes de empezar la Fase 4, se cerraron dos
+riesgos de consistencia detectados tras aprobar funcionalmente la Fase
+3: "registrar alimentación" y "crear alimento con stock inicial" se
+sincronizaban como dos operaciones de servidor independientes, cada
+una en su propia transacción — un fallo entre las dos podía dejar una
+escritura sin la otra. Ahora se sincronizan como comandos de negocio
+compuestos, cada uno en una única transacción de servidor; el orden de
+envío del outbox pasó de depender de `createdAt` a un orden explícito
+por nivel de dependencia; y se corrigió un bug real de recuperación
+donde un `"conflict"`/`"error"` quedaba bloqueado para siempre en vez
+de reevaluarse en el siguiente reintento. Todo probado contra
+PostgreSQL real, incluido un rollback forzado con una violación de
+llave primaria genuina (no un mock). Ningún cambio de negocio nuevo,
+ninguna migración de Prisma, ninguna versión nueva de Dexie. Detalle
+completo en `OFFLINE_SYNC.md` §10; decisiones de arquitectura
+específicas de la fase en `ARCHITECTURE.md` §4.3.
 
 ---
 

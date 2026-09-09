@@ -352,7 +352,7 @@ regla del signo.
 
 ### 9.2 FeedingRecord ↔ FeedInventoryMovement
 
-Registrar alimentación crea **dos** filas ligadas en una sola
+Registrar alimentación escribe **dos** filas ligadas en una sola
 transacción local (`createFeedingWithConsumption`,
 `src/lib/db/repositories/feedingRepository.ts`): el `FeedingRecord`
 (el evento descriptivo — quién, cuándo, cuánto, en qué estanque/lote) y
@@ -361,23 +361,15 @@ un `FeedInventoryMovement` tipo `CONSUMPTION` con
 vinculación es la que responde "¿por qué bajó el stock?" sin tener que
 adivinar.
 
-La garantía de "nunca descuenta dos veces" viene de dos capas
-independientes, no de una sola:
-
-1. **Idempotencia general del outbox** (§5): cada una de las dos
-   operaciones tiene su propio `operationId` fijo, generado una sola
-   vez al crear los registros en Dexie. Reenviar el mismo push tres
-   veces (por ejemplo, tras un corte de red a mitad de la respuesta)
-   nunca reaplica su efecto — es exactamente el mismo mecanismo que ya
-   garantiza esto para cualquier entidad desde la Fase 1.
-2. **Restricción única en el servidor** (defensa adicional,
-   `prisma/schema.prisma`): `FeedInventoryMovement` tiene
-   `@@unique([sourceType, sourceId])`. Si por cualquier motivo dos
-   movimientos distintos intentaran vincularse al mismo
-   `FeedingRecord`, Postgres rechazaría el segundo. En la práctica,
-   con la capa 1 ya cerrando el caso normal, esta restricción actúa
-   como red de seguridad ante un futuro bug, no como el mecanismo
-   principal.
+Desde la Fase 3.5, esas dos escrituras se sincronizan como **un único
+comando de negocio** (`RegisterFeeding`), aplicado en una sola
+transacción de servidor — ver §10 para el diseño completo y por qué el
+enfoque anterior (dos operaciones independientes) era un riesgo real de
+consistencia, no solo teórico. La restricción única
+`@@unique([sourceType, sourceId])` de `FeedInventoryMovement`
+(`prisma/schema.prisma`) se mantiene como defensa adicional ante un
+futuro bug, no como el mecanismo principal — ese ahora es la
+atomicidad de la transacción compuesta.
 
 ### 9.3 Validación de stock: cliente y servidor
 
@@ -445,54 +437,296 @@ menos de dos muestreos comparables, ambos cálculos devuelven
 
 ### 9.7 Orden de sincronización de operaciones dependientes
 
-Un `FeedingRecord` depende de `Feed`, `FishBatch` y `Pond`; los cinco
-pueden haberse creado enteramente offline en la misma sesión, en un
-orden distinto para cada dispositivo (§42 del encargo de Fase 3). El
-outbox (`syncQueue`) no implementa un ordenamiento topológico
-explícito — se apoya en dos garantías que ya existían desde la Fase 1:
-
-1. **Orden por `createdAt`**: `collectEligibleOperations` (§4) ordena
-   siempre por fecha de creación ascendente. Como la UI solo deja
-   elegir una entidad ya existente (el selector de "Alimento" en
-   `/alimentacion/nueva` no puede mostrar un alimento que no se haya
-   guardado antes), el padre **siempre** tiene un `createdAt` igual o
-   anterior al del hijo — nunca posterior.
-2. **Autocorrección ante un empate o un envío fuera de orden**: si dos
-   operaciones comparten el mismo `createdAt` (posible cuando una
-   creación compuesta como lote+siembra encola dos operaciones casi
-   simultáneas) y llegan al servidor en el orden equivocado, la
-   inserción del hijo falla por una violación de llave foránea real de
-   Postgres — el servidor la registra como `"error"` (nunca
-   `"conflict"` ni una pérdida silenciosa) y la deja en el outbox local
-   para reintentar. En el siguiente ciclo de sincronización el padre ya
-   está aplicado, así que el reintento del hijo se aplica sin
-   intervención manual. No se necesitó construir un ordenamiento
-   topológico explícito: el mecanismo de reintentos con backoff que ya
-   existía (§4) es suficiente para autocorregir el caso raro de empate.
+Ver §10.5 — desde la Fase 3.5, el orden de envío es explícito
+(`getSyncPriority`/`selectReadyOperations`), no una consecuencia
+incidental de `createdAt`. Esta subsección describía el diseño de la
+Fase 3 (ordenar solo por `createdAt` y confiar en el reintento ante un
+empate); se mantiene aquí solo como referencia histórica de qué
+riesgo motivó el cambio — ver §10.5 para el mecanismo vigente.
 
 ### 9.8 Operaciones atómicas locales y en servidor
 
-Toda creación compuesta (lote+siembra en Fase 2; alimento+stock
-inicial y alimentación+consumo en Fase 3) se escribe **en una sola
-transacción Dexie** que incluye tanto los registros de dominio como
-sus entradas de `syncQueue` — nunca dos llamadas independientes a
-`createRecord`. Esto garantiza que, si el navegador se cierra a mitad
-de camino, nunca queda un `FeedingRecord` sin su
-`FeedInventoryMovement` (o viceversa) en el dispositivo.
+Ver §10.1-§10.2 — desde la Fase 3.5, una creación compuesta
+(alimentación+consumo, alimento+stock inicial) se sincroniza como
+**un único comando de negocio**, aplicado en una sola transacción de
+servidor: nunca puede quedar aplicada una escritura sin la otra. Esta
+subsección describía el diseño de la Fase 3 (dos operaciones
+independientes, cada una en su propia transacción); se mantiene aquí
+solo como referencia histórica de qué riesgo motivó el cambio — ver
+§10 para el diseño vigente y por qué el riesgo era real, no solo
+teórico.
 
-En el servidor, cada operación de la transacción compuesta sigue
-siendo una fila independiente de `SyncOperation` (con su propio
-`operationId`), pero cada una se aplica dentro de su propia transacción
-Prisma — no hay una única transacción de servidor que abarque las dos
-operaciones. Esto es intencional y no compromete la consistencia: la
-validación de negocio que importa (que el `FeedInventoryMovement`
-CONSUMPTION no deje el stock negativo) ya ocurre dentro de la
-transacción de *esa* operación, con su propio advisory lock — no
-depende de que el `FeedingRecord` se haya aplicado antes o después. Si
-el `FeedingRecord` llega y el `FeedInventoryMovement` falla (o
-viceversa), cada uno queda en el estado que le corresponde
-(`"applied"`/`"error"`/`"conflict"`) y el reintento del outbox termina
-de converger — nunca queda "medio aplicada" una operación compuesta de
-forma que el ledger de alimento quede inconsistente, porque el ledger
-solo se construye a partir de los `FeedInventoryMovement`
-efectivamente aplicados, nunca de los `FeedingRecord`.
+## 10. Fase 3.5 — Hardening: comandos de negocio compuestos, orden determinista y recuperación de fallos
+
+Antes de esta fase, "registrar alimentación" se sincronizaba como
+**dos** operaciones independientes (`FeedingRecord` CREATE +
+`FeedInventoryMovement` CREATE), cada una en su propia transacción de
+servidor. El riesgo no era hipotético: un fallo entre las dos (caída
+del servidor, corte de red a mitad del segundo `push`, un error real
+de Postgres) podía dejar un `FeedingRecord` sin su movimiento de
+inventario, o viceversa — el ledger de alimento (§9.1) se construye
+solo a partir de `FeedInventoryMovement`, así que un `FeedingRecord`
+huérfano no rompía el stock, pero un `FeedInventoryMovement` huérfano
+(sin su `FeedingRecord`) sí dejaba un movimiento de consumo sin
+ninguna explicación de negocio visible. Lo mismo aplicaba a "crear
+alimento con stock inicial" (`Feed` + `FeedInventoryMovement`
+`INITIAL_STOCK`). Esta sección documenta cómo se cerró ese riesgo, sin
+depender solo del reintento para mantenerlo cerrado.
+
+### 10.1 Comandos de negocio compuestos como entidades del protocolo
+
+En vez de que el cliente encole dos operaciones de sync por cada
+acción de usuario, encola **una sola**, con un `entityType`
+pseudo-entidad que no mapea 1:1 a una tabla de Prisma sino a un
+handler de servidor que escribe varias tablas:
+
+| Comando de negocio | Encola en vez de | Escribe (servidor) |
+|---|---|---|
+| `RegisterFeeding` | `FeedingRecord` + `FeedInventoryMovement` | `FeedingRecord` + `FeedInventoryMovement` (CONSUMPTION) |
+| `CreateFeedWithInitialStock` | `Feed` + `FeedInventoryMovement` | `Feed` + `FeedInventoryMovement` (INITIAL_STOCK) |
+
+Sin stock inicial, `createFeed` sigue encolando un `Feed` CREATE
+simple — no hay nada compuesto que proteger cuando no hay una segunda
+escritura.
+
+El `id` del comando es el de la entidad **principal** que crea (el
+`FeedingRecord`/el `Feed`) — es también el `entityId` de la operación,
+así que el resto del protocolo (pull, `SyncOperation.entityId`) no
+necesita distinguir un comando compuesto de una entidad simple.
+
+```mermaid
+sequenceDiagram
+    participant UI
+    participant Repo as feedingRepository.ts
+    participant Dexie
+    participant Engine as engine.ts
+    participant API as POST /api/sync/push
+    participant PG as PostgreSQL
+
+    UI->>Repo: createFeedingWithConsumption({ feedId, quantityKg: 18, ... })
+    Repo->>Dexie: transacción rw (feedingRecords + feedInventoryMovements + syncQueue)
+    Dexie->>Dexie: feedingRecords.add(...)
+    Dexie->>Dexie: feedInventoryMovements.add(CONSUMPTION)
+    Dexie->>Dexie: syncQueue.add({ entityType: "RegisterFeeding",<br/>payload: { id, movementId, batchId, pondId,<br/>feedId, quantityKg, ... } })
+    Note over Dexie: UNA sola entrada de outbox,<br/>no dos independientes
+    Engine->>API: push { operations: [RegisterFeeding] }
+    API->>PG: UNA transacción Prisma:<br/>lock(feedId) → validar stock →<br/>FeedingRecord.create → FeedInventoryMovement.create<br/>→ SyncOperation.create
+    alt todo ok
+        PG-->>API: commit — las dos escrituras juntas
+    else falla cualquier paso
+        PG-->>API: rollback automático — ninguna de las dos
+    end
+```
+
+### 10.2 Garantía de atomicidad
+
+`applyRegisterFeedingOperation` y `applyCreateFeedWithInitialStockOperation`
+(`src/app/api/sync/_lib/applyOperation.ts`) hacen sus dos escrituras
+dentro del `tx` que **ya** les pasa `processOperation`
+(`src/app/api/sync/push/route.ts`) — el mismo `prisma.$transaction`
+que también registra el `SyncOperation`. Si cualquier paso falla
+(validación, un error real de Postgres), Prisma revierte
+automáticamente **todo** lo que la transacción llevaba escrito hasta
+ese punto — nunca queda un `FeedingRecord` sin su movimiento, nunca un
+movimiento sin su `FeedingRecord`.
+
+Esto no es una promesa de diseño sin verificar: `applyFishTransferOperation`
+y `applyMortalityRecordOperation` (Fase 2/3) ya tenían esta misma
+propiedad por construcción — cada handler de `applyOperation` recibe
+el `tx` compartido con el registro de `SyncOperation`, así que lock +
+validación de balance + creación + `SyncOperation` siempre estuvieron
+en una sola transacción para *toda* entidad. El riesgo real y
+específico de la Fase 3.5 era el patrón de **dos operaciones
+separadas** para una sola acción de usuario (§10 arriba) — no una
+falla de atomicidad dentro de cada operación individual.
+
+Probado con un fallo **real** de Postgres, no un mock: se planta de
+antemano una fila con el mismo id que usará el segundo `create()` de
+la transacción (el `FeedInventoryMovement`, o para `FishTransfer`/
+`MortalityRecord`, la propia entidad), forzando una violación de
+llave primaria a mitad de la transacción. El resultado siempre es
+`"error"`, con cero filas nuevas y el stock/balance sin cambios — ver
+`src/app/api/sync/__tests__/registerFeeding.integration.test.ts` (§17),
+`fishTransfer.integration.test.ts` y `dailyOperations.integration.test.ts`.
+
+### 10.3 Idempotencia del comando compuesto
+
+Como ahora es **una** operación con **un** `operationId` (en vez de
+dos), la restricción `UNIQUE` de `SyncOperation.operationId` (§5) por
+sí sola cierra "reenviar tras perder la respuesta nunca duplica":
+reintentar `RegisterFeeding` tres veces deja exactamente un
+`FeedingRecord`, un `FeedInventoryMovement` y el stock descontado una
+sola vez — no hace falta ningún mecanismo nuevo, solo menos
+operaciones que mantener sincronizadas entre sí. Verificado en
+`registerFeeding.integration.test.ts` (§16 y el test de
+`CreateFeedWithInitialStock` + retry).
+
+### 10.4 Compatibilidad con datos y outbox existentes
+
+`syncEntityTypeSchema` conserva `"FeedingRecord"`, `"FeedInventoryMovement"`
+y `"Feed"` como valores válidos (`src/lib/validation/sync.ts`) — sus
+handlers de servidor (`applyFeedingRecordOperation`,
+`applyFeedInventoryMovementOperation`, `applyFeedOperation`) siguen
+existiendo sin cambios. El código cliente nuevo simplemente deja de
+*emitir* esos entityTypes por separado; cualquier entrada ya encolada
+en el outbox de un dispositivo con la versión anterior de la app
+(offline desde antes de esta actualización) sigue sincronizando con
+normalidad la próxima vez que se conecte, sin ninguna migración de
+Dexie. No se transforma el outbox pendiente ni los datos ya
+sincronizados — nunca se destruye IndexedDB por este cambio. Tampoco
+hizo falta ninguna migración de Prisma: `RegisterFeeding` y
+`CreateFeedWithInitialStock` son comandos a nivel de protocolo de
+sincronización, no tablas nuevas — las tablas `Feed`,
+`FeedInventoryMovement` y `FeedingRecord` no cambiaron.
+
+### 10.5 Orden de sincronización determinista
+
+Antes de esta fase, el outbox se enviaba ordenado solo por
+`createdAt` (§9.7 histórico). Suficiente casi siempre porque la UI
+solo deja elegir una entidad ya guardada, pero no una garantía
+explícita: dos operaciones con el mismo timestamp (una creación
+compuesta encola varias casi simultáneas) podían enviarse en el orden
+equivocado, y el primer sync de un dispositivo que trabajó offline
+mucho tiempo antes de conectarse dependía de esa coincidencia de
+timestamps para no generar errores de llave foránea evitables.
+
+`src/lib/sync/priority.ts` reemplaza ese orden implícito por uno
+explícito, basado en las relaciones reales de `prisma/schema.prisma`:
+
+| Nivel | Entidades | Depende de |
+|---|---|---|
+| 1 | `Species`, `Pond`, `Feed`, `CreateFeedWithInitialStock` | nada |
+| 2 | `FishBatch` | `Species` |
+| 3 | `Stocking` | `FishBatch` + `Pond` |
+| 4 | `FishTransfer`, `MortalityRecord`, `Sampling`, `FeedInventoryMovement`, `FeedingRecord`, `RegisterFeeding` | `FishBatch`/`Pond`/`Feed` (y su validación de balance necesita que `Stocking` ya se haya aplicado) |
+
+`getSyncPriority(entityType)` da el nivel; `getDependencyEntityIds`
+extrae del payload los ids de los que depende cada operación (p. ej.
+`RegisterFeeding` depende de `batchId`, `pondId`, `feedId`).
+`selectReadyOperations` ordena por `[nivel, createdAt, id de la
+operación]` — el `id` como desempate final asegura que el orden sea
+100% determinista incluso ante un empate exacto de `createdAt`, nunca
+dependiendo de que dos timestamps generados por separado coincidan o
+no. `engine.ts`'s `collectEligibleOperations` la usa en vez del `sort`
+plano anterior.
+
+Esto **no sustituye** idempotencia/retries/backoff (§10.6): siguen
+siendo necesarios para fallos de red genuinos y para el caso raro de
+empate dentro de un mismo nivel. El orden solo reduce cuántas veces
+hace falta ese reintento en el camino feliz — de "casi siempre, salvo
+empate" (Fase 3) a "siempre, salvo un fallo de red genuino" (Fase
+3.5).
+
+Verificado con un dataset completo creado offline (Species → Pond ×2
+→ FishBatch → Stocking → alimento con stock inicial → alimentación →
+mortalidad → muestreo → traslado), con los timestamps deliberadamente
+en el orden **inverso** al de las dependencias reales — para no
+depender por accidente de que el reloj local avance en el mismo
+sentido que las dependencias. En el orden que produce
+`selectReadyOperations`, el primer sync se aplica completo, sin un
+solo error de llave foránea; el mismo dataset, enviado en el orden
+ingenuo por `createdAt`, sí produce errores — confirmando que el
+cambio cierra un riesgo real, no cosmético. Ver
+`src/app/api/sync/__tests__/syncOrder.integration.test.ts` (§21).
+
+### 10.6 Prevención de inundación: un padre en error retiene a sus hijos
+
+`selectReadyOperations` también excluye del lote actual cualquier
+operación cuya dependencia tenga **actualmente** una entrada en estado
+`"error"` en el outbox — para no gastar solicitudes HTTP en hijos que
+se sabe que van a fallar mientras su padre siga fallando. Es
+deliberadamente simple, tal como pedía el encargo ("no hace falta
+construir un scheduler complejo"): un filtro de un solo paso, no
+transitivo, sobre una lista ya cargada en memoria — no reintenta, no
+espera, no mantiene estado entre llamadas.
+
+- Un padre **`"pending"`** (nunca se intentó, o es la primera vez)
+  **no** bloquea a su hijo: gracias al orden explícito de §10.5, el
+  padre va antes en el mismo lote y `push/route.ts` los procesa uno a
+  uno dentro de la misma solicitud — para cuando le toca al hijo, el
+  padre ya se aplicó.
+- Un padre **`"error"`** sí bloquea a su hijo, hasta que el padre se
+  reintente con éxito en un ciclo posterior de `runSync`.
+
+Límite documentado, aceptado a propósito: el filtro no es transitivo
+(un abuelo en error no bloquea a un nieto cuyo padre nunca llegó a
+intentarse), así que en el peor caso una cadena de dependencia
+profunda genuinamente rota puede gastar una solicitud extra por nivel
+en un mismo ciclo de sync — se autocorrige solo en el siguiente ciclo
+(el hijo intentado pasa a `"error"` y ahí sí queda bloqueado), nunca
+es un bug de pérdida o duplicación de datos. Ver
+`src/lib/sync/__tests__/priority.test.ts`.
+
+### 10.7 Recuperación después de fallos parciales: el reintento tiene que reevaluar, no solo repetir
+
+Al escribir las pruebas de §10.5 se encontró un problema real en
+`processOperation` (`src/app/api/sync/push/route.ts`), previo a esta
+fase: la comprobación de idempotencia trataba **cualquier** fila
+existente de `SyncOperation` para un `operationId` como definitiva,
+sin importar su estado — no solo `"applied"`. Un operationId que
+había quedado en `"conflict"` (por ejemplo, stock insuficiente en ese
+momento) o en `"error"` (por ejemplo, el `FishBatch` padre todavía no
+había sincronizado) quedaba bloqueado **para siempre**: el motor de
+sync seguía reintentando esa entrada del outbox con backoff, pero el
+servidor respondía siempre con el mismo estado guardado, sin volver a
+ejecutar `applyOperation` — nunca se re-evaluaba si el stock ya se
+había repuesto o si el padre ya existía.
+
+Esto contradecía directamente el propio principio de esta fase (§13
+del encargo: "el orden no sustituye al retry — el retry recupera
+fallos transitorios"): un reintento que nunca vuelve a evaluar nada no
+es un reintento.
+
+**Corrección**: `processOperation` ahora solo corta en seco cuando el
+estado existente es `"applied"` (el único caso realmente terminal —
+ya se aplicó, nunca se vuelve a tocar la base para ese
+`operationId`). Para `"conflict"`/`"error"`, vuelve a ejecutar
+`applyOperation` dentro de una nueva transacción y actualiza (`upsert`,
+no `create`) la fila de `SyncOperation` existente con el resultado
+**actual**. Esto es seguro porque ya estaba probado que ni `"conflict"`
+ni `"error"` dejan ninguna escritura de dominio a medias (§10.2): no
+hay nada que "deshacer" antes de reintentar.
+
+```mermaid
+sequenceDiagram
+    participant Engine as Motor de sync
+    participant API as POST /api/sync/push
+    participant PG as PostgreSQL
+
+    Note over PG: SyncOperation("abc") = "conflict"<br/>(stock insuficiente la primera vez)
+    Engine->>API: reintento, mismo operationId "abc"
+    API->>PG: existing.status !== "applied" -> re-ejecutar applyOperation
+    Note over PG: el stock ya se repuso (otra sync)
+    API->>PG: upsert SyncOperation("abc", "applied")
+    API-->>Engine: { status: "applied" }
+    Note over Engine: antes de la corrección, esto<br/>habría respondido "conflict" para siempre
+```
+
+Verificado en `src/app/api/sync/__tests__/syncOrder.integration.test.ts`
+(§22): una mortalidad y un traslado que fallan en `"conflict"` porque
+su `Stocking` padre todavía no sincronizó (simulando una solicitud
+perdida) se reintentan con el mismo `operationId` una vez el padre
+existe, y esta vez sí quedan `"applied"` — sin duplicar ni perder
+ninguna otra operación del mismo lote.
+
+### 10.8 Mensajes de conflicto comprensibles por operación
+
+Un conflicto de un comando de negocio compuesto (`RegisterFeeding`,
+`FeedInventoryMovement`, `FishTransfer`, `MortalityRecord`) no es un
+conflicto de "versión más reciente" (last-write-wins, §6 — el único
+caso real para `Species`/`Pond`/`FishBatch`/`Feed`): es un conflicto
+de balance/stock — el dato local dejó de ser válido porque otro
+dispositivo consumió el mismo stock o balance primero. Mostrar el
+mensaje genérico de LWW ahí sería confuso.
+
+`src/lib/sync/conflictMessages.ts` (`getConflictMessage`) construye un
+mensaje específico por tipo de operación — por ejemplo, para
+`RegisterFeeding`: *"No se pudo sincronizar la alimentación de 18 kg
+porque el stock disponible cambió desde otro dispositivo."* — nunca
+desglosado en dos incidentes separados ("Feeding falló" / "Inventory
+falló"): la operación compuesta se presenta como **un** incidente
+comprensible, igual que se registró como una única entrada de outbox.
+`engine.ts` lo usa al marcar una operación en conflicto como error
+local. Ver `src/lib/sync/__tests__/conflictMessages.test.ts` y el test
+de `engine.test.ts` que confirma el mensaje específico llega hasta el
+outbox local para una operación `RegisterFeeding` real.

@@ -1,12 +1,14 @@
 # ARCHITECTURE.md
 
 Este documento describe **cómo está construido lo que ya existe** (Fases
-1, 2 y 3). Para la arquitectura objetivo completa del proyecto (todas las
-fases, modelo de datos completo, riesgos) ver [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md).
+1, 2, 3 y 3.5). Para la arquitectura objetivo completa del proyecto (todas
+las fases, modelo de datos completo, riesgos) ver [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md).
 Para el detalle específico de offline/sincronización, con diagramas, ver
 [`OFFLINE_SYNC.md`](./OFFLINE_SYNC.md) — su §8 documenta el modelo de
-lotes/siembras/traslados (Fase 2) y su §9 el de alimento/mortalidad/
-muestreos (Fase 3).
+lotes/siembras/traslados (Fase 2), su §9 el de alimento/mortalidad/
+muestreos (Fase 3), y su §10 el hardening de consistencia de la Fase 3.5
+(comandos de negocio compuestos, orden de sync determinista, recuperación
+de fallos parciales).
 
 ## 1. Visión general
 
@@ -128,14 +130,20 @@ una, nunca dos implementaciones que puedan divergir:
   ledger para la UI (`getBatchDistribution`, `getBatchHistory`,
   `getPondOccupancy`, `getPondHistory`, y desde la Fase 3
   `getBatchProductionSummary`: peso/biomasa/supervivencia estimados).
-- `repositories/feedRepository.ts` (Fase 3): `createFeed` crea el
-  alimento y, si se indica, su `FeedInventoryMovement` `INITIAL_STOCK`
-  en una transacción — mismo patrón que `createFishBatchWithStocking`.
-- `repositories/feedingRepository.ts` (Fase 3):
-  `createFeedingWithConsumption` crea `FeedingRecord` +
+- `repositories/feedRepository.ts` (Fase 3, comando compuesto desde
+  Fase 3.5): `createFeed` crea el alimento y, si se indica stock
+  inicial, su `FeedInventoryMovement` `INITIAL_STOCK`, en una
+  transacción Dexie local; el outbox encola un único comando de negocio
+  `CreateFeedWithInitialStock` (en vez de dos operaciones
+  independientes) para que el servidor nunca pueda aplicar el `Feed`
+  sin su stock inicial. Sin stock inicial sigue siendo un `Feed` CREATE
+  simple. Ver `OFFLINE_SYNC.md` §10.1-§10.2.
+- `repositories/feedingRepository.ts` (Fase 3, comando compuesto desde
+  Fase 3.5): `createFeedingWithConsumption` escribe `FeedingRecord` +
   `FeedInventoryMovement` `CONSUMPTION` vinculados
-  (`sourceType: "FEEDING"`) en una transacción, validando el stock
-  disponible antes de escribir.
+  (`sourceType: "FEEDING"`) en una transacción Dexie local, validando el
+  stock disponible antes de escribir; el outbox encola un único comando
+  de negocio `RegisterFeeding`. Ver `OFFLINE_SYNC.md` §10.1-§10.2.
 - `repositories/mortalityRepository.ts` (Fase 3): `createMortality`
   valida el balance del estanque (mismo criterio que los traslados)
   antes de escribir.
@@ -153,10 +161,21 @@ una, nunca dos implementaciones que puedan divergir:
 - `status.ts`: store observable minimalista (`getSyncStatus`,
   `subscribeSyncStatus`, `setSyncStatus`) consumido con
   `useSyncExternalStore` desde React.
+- `priority.ts` (Fase 3.5): `getSyncPriority`/`getDependencyEntityIds`/
+  `selectReadyOperations` — orden de envío explícito por niveles de
+  dependencia real (no solo `createdAt`) y filtro simple de un solo paso
+  que retiene a los hijos de un padre actualmente en error. Ver
+  `OFFLINE_SYNC.md` §10.5-§10.6.
+- `conflictMessages.ts` (Fase 3.5): `getConflictMessage` — mensaje de
+  conflicto específico por tipo de operación (balance/stock vs. versión
+  LWW), para que un comando compuesto se presente como un único
+  incidente comprensible. Ver `OFFLINE_SYNC.md` §10.8.
 - `engine.ts`: orquesta un ciclo de sincronización (`runSync`) — ver
   `OFFLINE_SYNC.md` para el flujo completo — y expone `startSyncEngine()`
   para conectar los disparadores automáticos (apertura de la app, evento
-  `online`, intervalo periódico).
+  `online`, intervalo periódico). Usa `priority.ts` para decidir el orden
+  y el filtro de dependencias del lote a enviar, y `conflictMessages.ts`
+  al marcar una operación en conflicto como error local.
 
 ### `src/lib/validation/sync.ts` — validación compartida
 
@@ -175,14 +194,22 @@ servidor (API routes).
 
 - `push/route.ts`: valida con Zod, aplica cada operación en una
   transacción Prisma, y usa `operationId` (único en `SyncOperation`) como
-  clave de idempotencia — ver `OFFLINE_SYNC.md` §3.
+  clave de idempotencia — ver `OFFLINE_SYNC.md` §3. Desde la Fase 3.5,
+  solo el estado `"applied"` es terminal: un `operationId` que quedó en
+  `"conflict"`/`"error"` se vuelve a evaluar en el siguiente reintento
+  (con el mismo `operationId`, actualizando la fila existente vía
+  `upsert`) en vez de repetir para siempre el mismo status guardado —
+  ver `OFFLINE_SYNC.md` §10.7 (el bug real que esto corrigió y cómo se
+  probó).
 - `pull/route.ts`: entrega cambios posteriores a `?since=`, calculando su
   propio cursor (`serverTime`) antes de leer, para que el cliente nunca
   dé por sincronizado un cambio que llegó a mitad de la consulta.
   Entrega `fishBatches`/`stockings`/`fishTransfers` (Fase 2) y
   `feeds`/`feedInventoryMovements`/`feedingRecords`/`mortalityRecords`/
   `samplings` (Fase 3); las entidades append-only se filtran por
-  `createdAt`, no `updatedAt` — nunca se actualizan.
+  `createdAt`, no `updatedAt` — nunca se actualizan. No cambió en la
+  Fase 3.5: siempre entrega las entidades reales, nunca el comando de
+  negocio compuesto que las creó.
 - `_lib/applyOperation.ts`: aplica CREATE/UPDATE/DELETE con resolución de
   conflictos last-write-wins por número de versión para `Species`/`Pond`/
   `FishBatch`/`Feed`. Para `FishTransfer` y `MortalityRecord` aplica
@@ -191,7 +218,16 @@ servidor (API routes).
   §8.3; para `FeedInventoryMovement` de tipo salida (`CONSUMPTION`,
   `ADJUSTMENT_OUT`, `LOSS`) aplica el mismo mecanismo con un lock por
   `feedId` (§9.4). Un movimiento/registro que dejaría un balance
-  negativo vuelve `status: "conflict"` en vez de aplicarse.
+  negativo vuelve `status: "conflict"` en vez de aplicarse. Desde la
+  Fase 3.5, `applyRegisterFeedingOperation` y
+  `applyCreateFeedWithInitialStockOperation` aplican los comandos de
+  negocio compuestos: sus dos escrituras (`FeedingRecord`+
+  `FeedInventoryMovement`, o `Feed`+`FeedInventoryMovement`) ocurren
+  dentro de la misma transacción que ya envuelve `push/route.ts` — ver
+  `OFFLINE_SYNC.md` §10.1-§10.2. Los handlers legacy
+  (`applyFeedingRecordOperation`, `applyFeedInventoryMovementOperation`,
+  `applyFeedOperation`) siguen existiendo, sin cambios, por compatibilidad
+  con outbox pendiente de versiones anteriores de la app (§10.4).
 
 ### `src/app/` — UI
 
@@ -399,6 +435,66 @@ que no se repitan las mismas dudas en fases futuras:
    definición al módulo de tipos, que es conceptualmente donde
    pertenece, y reexportándola desde `base.ts` para no romper el resto
    del código que ya la importaba de ahí.
+
+## 4.3 Decisiones de arquitectura tomadas durante la Fase 3.5
+
+Fase de hardening puro (§ el encargo la limitó explícitamente a
+consistencia — "no añadas nuevas funcionalidades de negocio todavía"):
+sin páginas ni entidades de dominio nuevas. Ver `OFFLINE_SYNC.md` §10
+para el detalle completo de cada punto.
+
+1. **"Registrar alimentación" y "crear alimento con stock inicial" se
+   sincronizan como un único comando de negocio**
+   (`RegisterFeeding`/`CreateFeedWithInitialStock`), no como dos
+   operaciones independientes: el riesgo de que el servidor aplicara
+   una escritura sin la otra (una caída, un corte de red a mitad del
+   segundo `push`) era real, no solo teórico. Cada comando se aplica en
+   una única transacción de servidor — Postgres revierte todo si
+   cualquier paso falla. No fue necesaria ninguna migración de Prisma
+   (son comandos de protocolo, no tablas nuevas) ni de Dexie (las
+   tablas locales no cambiaron).
+2. **`FishTransfer` y `MortalityRecord` ya tenían esta misma garantía
+   de atomicidad por construcción** desde las Fases 2/3: cada handler
+   de `applyOperation` siempre recibió el mismo `tx` que registra el
+   `SyncOperation`. El riesgo específico de la Fase 3.5 era el patrón
+   de dos operaciones separadas para una sola acción de usuario, no una
+   falla de atomicidad dentro de cada operación individual — se
+   confirmó con pruebas que fuerzan un fallo real de Postgres a mitad
+   de la transacción (no un mock), no solo con la revisión del código.
+3. **Compatibilidad hacia atrás por convivencia, no por migración**: los
+   `entityType` legacy (`FeedingRecord`/`FeedInventoryMovement`/`Feed`
+   como operaciones separadas) siguen siendo válidos en el servidor —
+   sus handlers no se tocaron. El outbox pendiente de un dispositivo con
+   una versión anterior de la app sincroniza igual la próxima vez que se
+   conecte. No se escribió ninguna transformación de datos existentes ni
+   se tocó IndexedDB de ninguna forma destructiva.
+4. **El orden de envío del outbox pasó de "por `createdAt`" a "por nivel
+   de dependencia explícito, con `createdAt` solo como desempate"**
+   (`src/lib/sync/priority.ts`): un dispositivo que trabajó offline
+   mucho tiempo, creando entidades con timestamps que no reflejan
+   necesariamente sus dependencias reales, ya no depende de esa
+   coincidencia para que su primer sync se aplique sin errores de llave
+   foránea evitables. Deliberadamente simple (no transitivo, sin
+   estado): un filtro de una sola pasada que retiene a los hijos de un
+   padre en error, sin construir un scheduler.
+5. **Se corrigió un bug real de recuperación de fallos parciales**:
+   `push/route.ts` trataba *cualquier* `SyncOperation` existente para un
+   `operationId` (no solo `"applied"`) como definitiva, así que un
+   `"conflict"`/`"error"` quedaba bloqueado para siempre — el motor de
+   sync seguía reintentando, pero el servidor nunca volvía a evaluar la
+   condición real (stock repuesto, padre ya sincronizado). Corregido
+   para que solo `"applied"` sea terminal; se descubrió escribiendo las
+   pruebas de orden de sincronización, no en el diseño original — un
+   recordatorio de por qué las pruebas de estos escenarios eran parte
+   explícita del encargo, no un accesorio.
+6. **Mensajes de conflicto específicos por tipo de operación**
+   (`src/lib/sync/conflictMessages.ts`): un conflicto de balance/stock
+   (`RegisterFeeding`, `FishTransfer`, `MortalityRecord`,
+   `FeedInventoryMovement`) usa el mensaje genérico de "versión más
+   reciente" (pensado para `Species`/`Pond`/`FishBatch`/`Feed`) solo si
+   no hay un tipo más específico — así un comando compuesto en
+   conflicto se ve como un único incidente comprensible, nunca desglosado
+   en sus escrituras internas.
 
 ## 5. Qué NO está implementado todavía
 
