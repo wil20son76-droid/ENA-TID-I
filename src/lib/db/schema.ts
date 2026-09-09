@@ -9,9 +9,14 @@
 import Dexie, { type EntityTable } from "dexie";
 
 import type {
+  FeedingRecordRecord,
+  FeedInventoryMovementRecord,
+  FeedRecord,
   FishBatchRecord,
   FishTransferRecord,
+  MortalityRecordRecord,
   PondRecord,
+  SamplingRecord,
   SpeciesRecord,
   StockingRecord,
   SyncMetaRecord,
@@ -24,6 +29,11 @@ export class AppDatabase extends Dexie {
   fishBatches!: EntityTable<FishBatchRecord, "id">;
   stockings!: EntityTable<StockingRecord, "id">;
   fishTransfers!: EntityTable<FishTransferRecord, "id">;
+  feeds!: EntityTable<FeedRecord, "id">;
+  feedInventoryMovements!: EntityTable<FeedInventoryMovementRecord, "id">;
+  feedingRecords!: EntityTable<FeedingRecordRecord, "id">;
+  mortalityRecords!: EntityTable<MortalityRecordRecord, "id">;
+  samplings!: EntityTable<SamplingRecord, "id">;
   syncQueue!: EntityTable<SyncQueueRecord, "id">;
   syncMeta!: EntityTable<SyncMetaRecord, "key">;
 
@@ -56,6 +66,19 @@ export class AppDatabase extends Dexie {
       fishBatches: "id, code, speciesId, status, updatedAt",
       stockings: "id, batchId, pondId, [batchId+pondId], createdAt",
       fishTransfers: "id, batchId, fromPondId, toPondId, createdAt",
+    });
+
+    // Fase 3 (operación diaria): alimento, alimentación, mortalidad,
+    // muestreos. Ninguna tabla de v1/v2 se toca — Dexie conserva sus
+    // definiciones tal cual (probado en __tests__/schemaUpgrade.test.ts
+    // con datos de v2 ya presentes al abrir con este esquema).
+    this.version(3).stores({
+      feeds: "id, active, updatedAt",
+      feedInventoryMovements:
+        "id, feedId, [feedId+date], movementType, [sourceType+sourceId], createdAt",
+      feedingRecords: "id, batchId, pondId, feedId, date, createdAt",
+      mortalityRecords: "id, batchId, pondId, [batchId+pondId], date, createdAt",
+      samplings: "id, batchId, pondId, [batchId+pondId], date, createdAt",
     });
   }
 }

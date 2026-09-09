@@ -113,3 +113,74 @@ describe("Dexie: upgrade de esquema v1 -> v2 sin perder datos", () => {
     upgradedDb.close();
   });
 });
+
+describe("Dexie: upgrade de esquema v2 -> v3 sin perder datos (Fase 3)", () => {
+  beforeEach(async () => {
+    await Dexie.delete(DB_NAME);
+  });
+
+  it("conserva un lote creado en v2 al reabrir con el esquema v3", async () => {
+    class LegacyV2Database extends Dexie {
+      fishBatches!: EntityTable<{ id: string; code: string }, "id">;
+
+      constructor() {
+        super(DB_NAME);
+        this.version(1).stores({
+          species: "id, active, updatedAt",
+          ponds: "id, code, status, updatedAt",
+          syncQueue: "id, status, entityType, [entityType+entityId], createdAt",
+          syncMeta: "key",
+        });
+        this.version(2).stores({
+          ponds: "id, code, status, updatedAt, active",
+          fishBatches: "id, code, speciesId, status, updatedAt",
+          stockings: "id, batchId, pondId, [batchId+pondId], createdAt",
+          fishTransfers: "id, batchId, fromPondId, toPondId, createdAt",
+        });
+      }
+    }
+
+    const legacyDb = new LegacyV2Database();
+    await legacyDb.open();
+    await legacyDb.fishBatches.add({ id: "batch-legacy-1", code: "PAC-2026-001-0000" });
+    legacyDb.close();
+
+    const upgradedDb = new AppDatabase();
+    await upgradedDb.open();
+
+    const preserved = await upgradedDb.fishBatches.get("batch-legacy-1");
+    expect(preserved?.code).toBe("PAC-2026-001-0000");
+
+    expect(await upgradedDb.feeds.count()).toBe(0);
+    expect(await upgradedDb.feedInventoryMovements.count()).toBe(0);
+    expect(await upgradedDb.feedingRecords.count()).toBe(0);
+    expect(await upgradedDb.mortalityRecords.count()).toBe(0);
+    expect(await upgradedDb.samplings.count()).toBe(0);
+
+    await upgradedDb.feeds.add({
+      id: "feed-1",
+      name: "Crecimiento 32%",
+      brand: null,
+      proteinPercent: null,
+      pelletSizeMm: null,
+      bagWeightKg: null,
+      defaultBagPrice: null,
+      defaultCostPerKg: null,
+      recommendedStage: null,
+      notes: null,
+      minimumStockKg: null,
+      active: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      deletedAt: null,
+      version: 1,
+      deviceId: "device-test",
+      createdBy: null,
+      updatedBy: null,
+    });
+
+    expect(await upgradedDb.feeds.count()).toBe(1);
+
+    upgradedDb.close();
+  });
+});

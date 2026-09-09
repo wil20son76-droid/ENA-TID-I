@@ -20,14 +20,16 @@ export interface CreateFishTransferInput {
 
 /**
  * Cuántos peces de este lote hay disponibles ahora mismo en este estanque,
- * calculado localmente (§13/§14: nunca se guarda como campo mutable).
+ * calculado localmente (§13/§14: nunca se guarda como campo mutable). La
+ * mortalidad cuenta como salida (§17 de la Fase 3), igual que un traslado.
  */
 export async function getAvailableInPond(batchId: string, pondId: string): Promise<number> {
-  const [stockings, transfers] = await Promise.all([
+  const [stockings, transfers, mortalities] = await Promise.all([
     db.stockings.where("batchId").equals(batchId).toArray(),
     db.fishTransfers.where("batchId").equals(batchId).toArray(),
+    db.mortalityRecords.where("batchId").equals(batchId).toArray(),
   ]);
-  return getBatchPondBalance(stockings, transfers, batchId, pondId);
+  return getBatchPondBalance(stockings, transfers, mortalities, batchId, pondId);
 }
 
 /**

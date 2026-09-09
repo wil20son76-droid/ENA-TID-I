@@ -10,7 +10,7 @@
 import type { EntityTable, IDType } from "dexie";
 
 import { db } from "../schema";
-import type { AuditFields, SyncEntityType, SyncOperationType } from "../types";
+import type { AuditFields, EventAuditFields, SyncEntityType, SyncOperationType } from "../types";
 import { getDeviceId } from "../deviceId";
 import { generateId } from "../uuid";
 
@@ -23,16 +23,7 @@ type Updatable<T extends AuditFields & { id: string }> = Partial<
   Omit<T, keyof AuditFields | "id">
 >;
 
-/**
- * Campos de auditoría reducidos para eventos append-only (Stocking,
- * FishTransfer): sin `version`/`createdBy`/`updatedBy` porque nunca se
- * editan desde la UI, solo se crean (§8/§10/§25 del encargo de Fase 2).
- */
-export interface EventAuditFields {
-  deviceId: string;
-  createdAt: string;
-  deletedAt: string | null;
-}
+export type { EventAuditFields };
 
 type EventCreatable<T extends EventAuditFields & { id: string }> = Omit<
   T,

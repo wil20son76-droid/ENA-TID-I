@@ -16,6 +16,18 @@ export interface AuditFields {
   updatedBy: string | null;
 }
 
+/**
+ * Campos de auditoría reducidos para eventos append-only (Stocking,
+ * FishTransfer, y desde la Fase 3: FeedInventoryMovement, FeedingRecord,
+ * MortalityRecord, Sampling): sin `version`/`createdBy`/`updatedBy`
+ * porque nunca se editan desde la UI, solo se crean.
+ */
+export interface EventAuditFields {
+  deviceId: string;
+  createdAt: string;
+  deletedAt: string | null;
+}
+
 export interface SpeciesFields {
   commonName: string;
   scientificName: string | null;
@@ -144,7 +156,132 @@ export interface FishTransferRecord extends FishTransferFields {
   deletedAt: string | null;
 }
 
-export type SyncEntityType = "Species" | "Pond" | "FishBatch" | "Stocking" | "FishTransfer";
+// --- Fase 3: operación diaria ---
+
+export type FeedMovementType =
+  | "PURCHASE"
+  | "INITIAL_STOCK"
+  | "CONSUMPTION"
+  | "ADJUSTMENT_IN"
+  | "ADJUSTMENT_OUT"
+  | "LOSS"
+  | "RETURN";
+
+export type FeedingShift = "MORNING" | "MIDDAY" | "AFTERNOON" | "NIGHT";
+
+export type MortalityCause =
+  | "UNKNOWN"
+  | "LOW_OXYGEN"
+  | "DISEASE"
+  | "HANDLING"
+  | "PREDATORS"
+  | "TEMPERATURE"
+  | "WATER_QUALITY"
+  | "ACCIDENT"
+  | "OTHER";
+
+/** Catálogo de alimentos (§3 del encargo de Fase 3). Mutable, igual criterio que Species. */
+export interface FeedFields {
+  name: string;
+  brand: string | null;
+  proteinPercent: number | null;
+  pelletSizeMm: number | null;
+  bagWeightKg: number | null;
+  defaultBagPrice: number | null;
+  defaultCostPerKg: number | null;
+  recommendedStage: string | null;
+  notes: string | null;
+  minimumStockKg: number | null;
+  active: boolean;
+}
+
+export interface FeedRecord extends FeedFields, AuditFields {
+  id: string;
+}
+
+/**
+ * Movimiento de inventario de alimento (§4-§7): evento append-only.
+ * `quantityKg` siempre positivo — el signo lo decide `movementType` (ver
+ * src/lib/domain/feedLedger.ts). `sourceType`/`sourceId` vinculan un
+ * movimiento CONSUMPTION a su FeedingRecord de origen (§9).
+ */
+export interface FeedInventoryMovementFields {
+  feedId: string;
+  movementType: FeedMovementType;
+  quantityKg: number;
+  unitCostPerKg: number | null;
+  totalCost: number | null;
+  date: string;
+  sourceType: string | null;
+  sourceId: string | null;
+  notes: string | null;
+}
+
+export interface FeedInventoryMovementRecord extends FeedInventoryMovementFields, EventAuditFields {
+  id: string;
+}
+
+/** Registro diario de alimentación (§8-§9): evento append-only. */
+export interface FeedingRecordFields {
+  batchId: string;
+  pondId: string;
+  feedId: string;
+  date: string;
+  time: string | null;
+  quantityKg: number;
+  shift: FeedingShift | null;
+  responsibleName: string | null;
+  notes: string | null;
+}
+
+export interface FeedingRecordRecord extends FeedingRecordFields, EventAuditFields {
+  id: string;
+}
+
+/** Mortalidad (§15-§19): evento append-only, integrado en el ledger de peces. */
+export interface MortalityRecordFields {
+  batchId: string;
+  pondId: string;
+  date: string;
+  quantity: number;
+  estimatedAverageWeightG: number | null;
+  cause: MortalityCause;
+  notes: string | null;
+  responsibleName: string | null;
+}
+
+export interface MortalityRecordRecord extends MortalityRecordFields, EventAuditFields {
+  id: string;
+}
+
+/** Muestreo (§21-§24): evento append-only. `averageWeightG` ya viene calculado. */
+export interface SamplingFields {
+  batchId: string;
+  pondId: string;
+  date: string;
+  sampleFishCount: number;
+  totalSampleWeightKg: number;
+  averageWeightG: number;
+  averageLengthCm: number | null;
+  notes: string | null;
+  responsibleName: string | null;
+}
+
+export interface SamplingRecord extends SamplingFields, EventAuditFields {
+  id: string;
+}
+
+export type SyncEntityType =
+  | "Species"
+  | "Pond"
+  | "FishBatch"
+  | "Stocking"
+  | "FishTransfer"
+  | "Feed"
+  | "FeedInventoryMovement"
+  | "FeedingRecord"
+  | "MortalityRecord"
+  | "Sampling";
 
 export type SyncOperationType = "CREATE" | "UPDATE" | "DELETE";
 
