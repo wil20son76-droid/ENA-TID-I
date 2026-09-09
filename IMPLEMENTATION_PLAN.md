@@ -506,8 +506,8 @@ IMPLEMENTATION_PLAN.md
 | Fase | Contenido | Criterio de aceptación |
 |---|---|---|
 | **0 (actual)** | Análisis, arquitectura, este documento | Documento revisado, sin bloqueos críticos pendientes |
-| **1 — Base técnica** | Next.js/TS/Tailwind/Prisma/Postgres/Railway-ready, PWA base, Dexie + syncQueue, motor de sync mínimo (push/pull), layout y navegación, indicador de conexión | Se puede crear un registro offline de prueba y verlo sincronizado en Postgres al reconectar, sin duplicados |
-| **2 — Producción** | Species, Pond, FishBatch, Stocking, FishTransfer | Se puede crear especie → estanque → lote → siembra, todo offline |
+| **1 — Base técnica** ✅ | Next.js/TS/Tailwind/Prisma/Postgres/Railway-ready, PWA base, Dexie + syncQueue, motor de sync mínimo (push/pull), layout y navegación, indicador de conexión | Se puede crear un registro offline de prueba y verlo sincronizado en Postgres al reconectar, sin duplicados |
+| **2 — Producción** ✅ | Species, Pond, FishBatch, Stocking, FishTransfer | Se puede crear especie → estanque → lote → siembra, todo offline |
 | **3 — Operación diaria** | FeedingRecord (+InventoryMovement vinculado), Feed/inventario, MortalityRecord, Sampling, cálculo de biomasa | Registro rápido de alimentación en ≤3 toques; stock e indicadores consistentes |
 | **4 — Agua y planificación** | WaterQualityRecord + alertas por especie, Task, Calendario | Alertas visibles sin diagnosticar enfermedades; tareas offline |
 | **5 — Economía** | Supplier, Purchase, Expense, Customer, Harvest, Sale, rentabilidad por lote | Flujo cosecha→venta→rentabilidad correcto y trazable |
@@ -515,6 +515,16 @@ IMPLEMENTATION_PLAN.md
 | **7 — Hardening** | Prueba offline obligatoria (§65/§80) end-to-end, resolución de conflictos, rendimiento, seguridad, deploy Railway documentado | Escenario completo de §80 pasa sin pérdida ni duplicación |
 
 Cada fase cierra con: lint → typecheck → tests → build, antes de pasar a la siguiente (§69/§70).
+
+**Fase 2 — completada.** `FishBatch` terminó sin un `currentPondId`/
+`currentQuantity` mutable, tal como exige §14/§20 de este mismo
+documento: la ubicación y cantidad de un lote se derivan siempre de
+`Stocking`+`FishTransfer` (ledger append-only), soportando traslados
+parciales de un lote entre varios estanques a la vez. Detalle completo
+del modelo, la validación de balance en dos capas y el manejo de
+conflictos multi-dispositivo (advisory lock de Postgres) en
+`OFFLINE_SYNC.md` §8; decisiones de arquitectura específicas de la fase
+en `ARCHITECTURE.md` §4.1.
 
 ---
 

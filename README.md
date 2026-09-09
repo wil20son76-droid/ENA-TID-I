@@ -7,11 +7,16 @@ completa y [`ARCHITECTURE.md`](./ARCHITECTURE.md) /
 [`OFFLINE_SYNC.md`](./OFFLINE_SYNC.md) para el detalle técnico del modo
 offline y la sincronización.
 
-Estado actual: **Fase 1 — base técnica y offline/sync**. Solo están
-implementadas las entidades mínimas necesarias para demostrar la
-arquitectura de extremo a extremo (Especies, Estanques); el resto del
-dominio piscícola se documenta en el plan y se construye en fases
-posteriores.
+Estado actual: **Fase 2 — producción piscícola**. Sobre la base técnica
+offline/sync de la Fase 1 (Especies, Estanques) se añadió el núcleo
+productivo: Lotes, Siembras y Traslados, con distribución de peces por
+estanque calculada siempre a partir de un ledger de eventos (nunca un
+campo mutable), traslados parciales y validación de balances tanto en
+el cliente como en el servidor. El resto del dominio (alimentación,
+mortalidad, muestreos, cosechas, ventas...) se documenta en el plan y
+se construye en fases posteriores — ver
+[`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) y la sección
+["Modelo de producción piscícola" de `OFFLINE_SYNC.md`](./OFFLINE_SYNC.md#8-modelo-de-producción-piscícola-fase-2).
 
 ## Stack
 
@@ -47,8 +52,10 @@ cp .env.example .env
 # 3. Aplicar el esquema a la base de datos
 npm run db:migrate
 
-# 4. (Opcional) sembrar datos de demostración
-#    Requiere SEED_DEMO_DATA="true" en .env
+# 4. (Opcional) sembrar datos de demostración: especies, estanques
+#    E01-E04 y un lote de ejemplo (PAC-2026-001, 1000 peces en E01).
+#    Requiere SEED_DEMO_DATA="true" en .env; nunca corre en producción
+#    por accidente.
 npm run db:seed
 
 # 5. Levantar el servidor de desarrollo
@@ -77,7 +84,7 @@ Abre <http://localhost:3000>.
 | `npm run typecheck` | Comprobación de tipos (`tsc --noEmit`) |
 | `npm run test` | Tests unitarios y de integración (Vitest) |
 | `npm run test:watch` | Vitest en modo watch |
-| `npm run test:e2e` | Test E2E del escenario offline obligatorio (Playwright; compila y levanta un build de producción automáticamente) |
+| `npm run test:e2e` | Tests E2E offline (Playwright; compila y levanta un build de producción automáticamente): escenario base (`tests/e2e/offline.spec.ts`) y escenario de producción piscícola (`tests/e2e/production.spec.ts`) |
 | `npm run db:migrate` | Aplica migraciones de Prisma (desarrollo) |
 | `npm run db:migrate:deploy` | Aplica migraciones ya creadas (producción/CI) |
 | `npm run db:generate` | Regenera el cliente de Prisma |
@@ -116,10 +123,14 @@ para qué se cachea exactamente y por qué.
 # idempotencia de /api/sync/push, cursor de /api/sync/pull)
 npm run test
 
-# E2E del escenario offline obligatorio: crear online, desconectar,
-# seguir registrando datos, cerrar/reabrir sin conexión, modificar un
-# registro offline, reconectar y sincronizar sin duplicar, y recuperarse
-# de un fallo temporal del servidor sin perder datos.
+# E2E offline: escenario base (crear online, desconectar, seguir
+# registrando datos, cerrar/reabrir sin conexión, modificar un registro
+# offline, reconectar y sincronizar sin duplicar, y recuperarse de un
+# fallo temporal del servidor) + escenario de producción piscícola
+# (lote + siembra + traslado parcial 100% offline, cerrar/reabrir la
+# app y verificar que la distribución por estanque sigue correcta sin
+# red, reconectar y comprobar en Postgres que no hay duplicados, y que
+# un traslado que dejaría un estanque en negativo se rechaza).
 npm run test:e2e
 ```
 
@@ -156,15 +167,22 @@ migraciones corren automáticamente en el pipeline de Railway.
 prisma/              Esquema, migraciones y seed de Prisma
 src/
   app/                Rutas (App Router): páginas y API routes
-  components/         Componentes de UI (layout, sync, pwa)
+    estanques/        Listado, alta y ficha de estanque
+    lotes/             Listado, alta (lote+siembra) y ficha de lote
+  components/         Componentes de UI (layout, sync, pwa, estanques)
   hooks/              Hooks de React (estado de sincronización)
   lib/
     db/               Capa Dexie/IndexedDB (schema, repositorios)
+    domain/           Funciones puras de dominio (ledger, biomasa,
+                       código de lote, geometría de estanque) — sin
+                       dependencias de Dexie ni de Prisma, usadas por
+                       igual desde el cliente y el servidor
     server/           Cliente Prisma (servidor)
     sync/             Motor de sincronización cliente + protocolo
     validation/       Esquemas Zod compartidos cliente/servidor
   test/               Configuración de Vitest
-tests/e2e/            Tests Playwright (escenario offline)
+tests/e2e/            Tests Playwright (escenario offline base +
+                       producción piscícola)
 ```
 
 ## Documentación
