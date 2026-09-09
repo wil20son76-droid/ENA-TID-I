@@ -730,3 +730,174 @@ comprensible, igual que se registró como una única entrada de outbox.
 local. Ver `src/lib/sync/__tests__/conflictMessages.test.ts` y el test
 de `engine.test.ts` que confirma el mensaje específico llega hasta el
 outbox local para una operación `RegisterFeeding` real.
+
+## 11. Calidad del agua, alertas y planificación (Fase 4)
+
+Fase sin comandos compuestos ni cambios al outbox/prioridad/retries más
+allá de sumar las dos entidades nuevas al mismo mecanismo ya existente
+(§10.5): `WaterQualityRecord` y `Task` encajan en el diseño de
+sincronización tal cual estaba, sin necesitar ningún mecanismo nuevo.
+
+### 11.1 WaterQualityRecord: historial append-only, nunca un campo mutable
+
+Mismo principio de ledger que todo el resto del dominio (§8.1, §9.1):
+**no existe** `pond.currentPh`/`pond.currentTemperature`. La última
+medición, la tendencia y la alerta actual se derivan siempre del
+historial completo de `WaterQualityRecord` (evento append-only, igual
+criterio que `Sampling`/`MortalityRecord` — sin `version`, sin
+`updatedAt`). Requisito mínimo para guardar un registro: estanque +
+fecha + al menos un parámetro medido (`hasAtLeastOneMeasurement`,
+`src/lib/domain/waterQuality.ts`) — no se exige informar los ocho
+parámetros.
+
+**"Última medición" no es tan simple como parece.** La primera
+implementación ordenaba por `date` (`b.date.localeCompare(a.date)`) y
+tomaba la primera. Eso se rompe en un caso real y nada exótico: dos
+mediciones registradas el mismo día sin hora informada tienen
+literalmente el mismo `date` — el orden entre ellas queda indefinido,
+y con IndexedDB además depende de en qué orden Dexie devuelva las
+filas (nunca garantizado que sea el de inserción). Se descubrió
+escribiendo el E2E de esta fase (`tests/e2e/waterQualityAndTasks.spec.ts`,
+paso 4: dos mediciones el mismo día, la segunda con oxígeno bajo)
+cuando la alerta esperada no aparecía. Corregido con
+`getLatestMeasurement`/`compareMeasurementRecency`
+(`src/lib/domain/waterQuality.ts`): compara por `date`, luego por
+`time` si ambas lo informaron, y por último por `createdAt` (el
+momento real de registro, con precisión de milisegundos) como
+desempate — nunca deja un resultado indefinido. Una función pura,
+usada igual en `/calidad-agua`, el dashboard y la ficha de estanque,
+para no repetir (y volver a romper) la misma lógica de orden tres
+veces.
+
+### 11.2 Alertas operativas: nunca un diagnóstico, siempre derivadas
+
+`evaluateWaterQuality` (`src/lib/domain/waterQuality.ts`) compara la
+última medición de un estanque contra el rango recomendado de **cada**
+especie presente en él — `Species` ya traía `minTemperatureC`/
+`maxTemperatureC`/`minPh`/`maxPh`/`minDissolvedOxygenMgL` desde la
+Fase 1/2, reutilizados tal cual, sin duplicarlos en otra tabla. Una
+especie sin ningún parámetro configurado no genera ninguna alerta para
+esos parámetros — nunca se inventa un rango.
+
+**Un estanque puede tener varias especies** (§5 del encargo): la
+función evalúa la medición contra el rango de cada una por separado, y
+cada alerta lleva el `speciesId`/`speciesName` que la generó — nunca se
+reduce a un único rango arbitrario. Ejemplo probado en
+`waterQuality.test.ts`: oxígeno 4,5 mg/L es insuficiente para Tilapia
+(mínimo 5) pero suficiente para Pacú (mínimo 4) en el mismo estanque —
+la alerta sale solo para Tilapia.
+
+**Política de severidad** (única fuente, documentada en el propio
+módulo): el oxígeno disuelto bajo escala a `critical` por debajo de un
+20% adicional del mínimo recomendado (más urgente que las demás — es
+la condición más rápidamente letal para los peces); pH y temperatura
+fuera de rango son `warning`, y escalan a `critical` solo ante una
+desviación grande (más de 1 unidad de pH, o más de 4 °C).
+
+**Nunca un diagnóstico** (§47 del encargo): los mensajes dicen
+"Oxígeno disuelto bajo para Tilapia", "pH por encima del rango
+recomendado", "Temperatura por debajo del rango recomendado" — nunca
+"tus peces tienen enfermedad X". Es un sistema de control operativo,
+no un diagnóstico veterinario automático.
+
+**Validación física vs. alerta operativa — dos conceptos que nunca se
+mezclan** (§3/§35): un pH de 20 o un oxígeno negativo son físicamente
+imposibles (error de tipeo o de sensor) y se rechazan antes de
+guardar, en cliente (`assertPhysicallyValidMeasurement`) y en servidor
+(los mismos límites, `z.number().min(0).max(14)` etc. en
+`validation/sync.ts`, §42: nunca confiar solo en el cliente). Un pH de
+5, en cambio, es físicamente válido — pero puede generar una alerta
+operativa si está fuera del rango recomendado para una especie. La UI
+nunca mezcla ambos conceptos: una alerta de calidad del agua vive en
+su propia sección visual, con su propio color/icono, nunca junto a un
+mensaje de conflicto de sincronización.
+
+**Las alertas se calculan 100% en el dispositivo**, nunca en el
+servidor ni dependiendo de una respuesta de red — es la misma
+`evaluateWaterQuality` que corre en `/calidad-agua`, el dashboard y la
+ficha de estanque, ejecutada contra datos que ya están en IndexedDB.
+Verificado en el E2E (paso 4): con la red cortada, registrar una
+medición de oxígeno bajo muestra la alerta de inmediato.
+
+**Frescura de la medición** (§17): `isMeasurementStale` marca un
+estanque como "sin medición reciente" si la última es más antigua que
+`STALE_MEASUREMENT_THRESHOLD_HOURS` (24 h inicialmente, configurable
+después) — una advertencia operativa, deliberadamente distinta de una
+alerta de parámetro (§35): nunca se muestran mezcladas.
+
+### 11.3 Task: la única entidad mutable de esta fase
+
+A diferencia de todo lo demás en el dominio productivo (append-only),
+`Task` **sí** es mutable — se edita y se completa desde cualquier
+dispositivo (§19 del encargo). Usa exactamente el mismo mecanismo que
+`Species`/`Pond`/`Feed` desde la Fase 1: `createRecord`/`updateRecord`
+en el cliente, resolución de conflictos last-write-wins por número de
+versión en el servidor (`applyTaskOperation`, mismo patrón que
+`applySpeciesOperation`). No hizo falta ningún tratamiento especial
+para que funcionara offline — es la ventaja de reutilizar un mecanismo
+ya probado en vez de inventar uno nuevo para "por fin una entidad
+mutable".
+
+**Conflicto de tareas, probado explícitamente** (§34, obligatorio):
+dispositivo A completa una tarea (version 1→2); dispositivo B, sin
+haber visto ese cambio, edita el título desde su copia offline
+(todavía en version 1). El servidor aplica el cambio de A (más nuevo)
+y responde `"conflict"` al de B — el título de B **nunca** sobrescribe
+el estado ya aplicado, pero tampoco se pierde en silencio: la
+operación de B queda registrada, visible para que la persona la
+revise y, si corresponde, reintente desde el estado actual. Ver
+`src/app/api/sync/__tests__/waterQualityAndTasks.integration.test.ts`.
+
+Completar una tarea es un `updateTask` más (`status: "COMPLETED"`,
+`completedAt: ahora`) — funciona offline por el mismo mecanismo,
+verificado en el E2E (paso 5).
+
+### 11.4 Calendario: sin modelo nuevo, solo una vista combinada
+
+`/calendario` no introduce ninguna entidad ni tabla: combina `Task`
+(pendientes) con eventos ya existentes en otras tablas — fecha
+estimada de cosecha de un lote (`FishBatch.expectedHarvestDate`),
+muestreos y mediciones de calidad del agua ya realizados — y los
+distingue visualmente como **"Tarea pendiente"** vs. **"Evento
+histórico"** (§25 del encargo), nunca mezclados sin etiqueta. El
+recordatorio de muestreo (§26, `needsSamplingReminder`,
+`src/lib/domain/task.ts`) es solo una sugerencia visual si un lote
+lleva más de `SAMPLING_REMINDER_THRESHOLD_DAYS` (15 días) sin
+muestreo — nunca crea una `Task` automáticamente.
+
+### 11.5 Sincronización: mismo mecanismo, dos entidades más
+
+`WaterQualityRecord` entra al protocolo de sync como un evento
+append-only más (cursor incremental por `createdAt`, igual criterio
+que `Sampling`); `Task`, como una entidad mutable más (cursor por
+`updatedAt`, igual criterio que `Species`). Ninguna de las dos
+necesitó un comando de negocio compuesto (§10): cada una es una sola
+escritura de dominio, sin una segunda tabla relacionada que proteger
+como sí ocurría con alimentación+inventario.
+
+**Prioridad de sincronización** (`src/lib/sync/priority.ts`, §32 del
+encargo): ambas entran en el **nivel 3**, junto a `Stocking` — dependen
+de `Pond` (nivel 1) y opcionalmente de `FishBatch` (nivel 2), pero, a
+diferencia del nivel 4, ninguna de las dos valida ningún balance de
+peces ni de alimento, así que no necesitan esperar a que `Stocking` se
+haya aplicado primero — solo que el `Pond`/`FishBatch` que referencian
+ya exista. `getDependencyEntityIds` extrae `pondId` (siempre en
+`WaterQualityRecord`, opcional en `Task`) y `batchId` (opcional en
+ambas) del payload — ninguna dependencia inventada, ninguna prioridad
+existente modificada. Ver `src/lib/sync/__tests__/priority.test.ts`.
+
+**Idempotencia**: verificada igual que el resto del protocolo — la
+misma medición de calidad del agua reenviada tres veces con el mismo
+`operationId` deja exactamente una fila (§33, obligatorio). Ver
+`waterQualityAndTasks.integration.test.ts`.
+
+### 11.6 PWA: ninguna ruta nueva que cachear a mano
+
+`public/sw.js` (escrito a mano, sin Serwist — ver §4 de
+`ARCHITECTURE.md`) no mantiene una lista fija de rutas precacheadas: el
+caché del "app shell" se llena orgánicamente con lo que la persona ya
+visitó estando online. Las rutas nuevas de esta fase (`/calidad-agua`,
+`/calidad-agua/nueva`, `/tareas`, `/tareas/nueva`, `/calendario`)
+funcionan offline sin ningún cambio al service worker — verificado en
+el E2E, que las visita una vez online (§43 del encargo) y las vuelve a
+usar con la red cortada.

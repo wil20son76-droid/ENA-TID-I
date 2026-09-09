@@ -1,14 +1,14 @@
 # ARCHITECTURE.md
 
 Este documento describe **cómo está construido lo que ya existe** (Fases
-1, 2, 3 y 3.5). Para la arquitectura objetivo completa del proyecto (todas
-las fases, modelo de datos completo, riesgos) ver [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md).
+1, 2, 3, 3.5 y 4). Para la arquitectura objetivo completa del proyecto
+(todas las fases, modelo de datos completo, riesgos) ver [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md).
 Para el detalle específico de offline/sincronización, con diagramas, ver
 [`OFFLINE_SYNC.md`](./OFFLINE_SYNC.md) — su §8 documenta el modelo de
 lotes/siembras/traslados (Fase 2), su §9 el de alimento/mortalidad/
-muestreos (Fase 3), y su §10 el hardening de consistencia de la Fase 3.5
+muestreos (Fase 3), su §10 el hardening de consistencia de la Fase 3.5
 (comandos de negocio compuestos, orden de sync determinista, recuperación
-de fallos parciales).
+de fallos parciales), y su §11 calidad del agua, alertas y tareas (Fase 4).
 
 ## 1. Visión general
 
@@ -48,7 +48,7 @@ sincronización, y su ausencia nunca bloquea ni degrada la experiencia
 
 ## 2. Capas y responsabilidades
 
-### `src/lib/domain/` — dominio puro (Fases 2 y 3)
+### `src/lib/domain/` — dominio puro (Fases 2, 3 y 4)
 
 Funciones puras, sin dependencias de Dexie ni de Prisma, importadas por
 igual desde el cliente (repositorios) y el servidor
@@ -84,27 +84,43 @@ una, nunca dos implementaciones que puedan divergir:
   producción por lote (peces actuales, supervivencia/mortalidad %,
   biomasa calculada por estanque, nunca cantidad total × un único
   peso).
+- `waterQuality.ts` (Fase 4): `evaluateWaterQuality` — alertas
+  operativas por especie presente en el estanque, nunca un diagnóstico;
+  `assertPhysicallyValidMeasurement` — rangos físicos absolutos,
+  distintos de los rangos recomendados por especie;
+  `getLatestMeasurement`/`compareMeasurementRecency` — única fuente
+  para decidir cuál es "la última medición" (fecha, luego hora, luego
+  `createdAt` como desempate — nunca un orden de array sin garantías);
+  `isMeasurementStale`; `getParameterTrend`. Ver `OFFLINE_SYNC.md` §11.1-§11.2.
+- `task.ts` (Fase 4): `classifyTask` (hoy/próximas/vencidas/
+  completadas/canceladas), `comparePriority`, `needsSamplingReminder`
+  (solo una sugerencia visual, nunca crea una `Task`). Ver
+  `OFFLINE_SYNC.md` §11.3-§11.4.
 
 ### `src/lib/db/` — datos locales
 
 - `schema.ts`: define `AppDatabase extends Dexie` con las tablas
   `species`, `ponds`, `fishBatches`, `stockings`, `fishTransfers`,
   `feeds`, `feedInventoryMovements`, `feedingRecords`,
-  `mortalityRecords`, `samplings`, `syncQueue`, `syncMeta`, versionadas
-  explícitamente (`this.version(1).stores(...)` … `this.version(3).stores(...)`).
+  `mortalityRecords`, `samplings`, `waterQualityRecords`, `tasks`,
+  `syncQueue`, `syncMeta`, versionadas explícitamente
+  (`this.version(1).stores(...)` … `this.version(4).stores(...)`).
   Cualquier cambio de esquema agrega una nueva versión, nunca modifica
   la existente, para no perder datos de dispositivos que llevaban tiempo
   sin sincronizar — cada salto de versión se probó explícitamente contra
   una base con datos de la versión anterior ya presentes
-  (`schemaUpgrade.test.ts`).
+  (`schemaUpgrade.test.ts`, incluido v3→v4 de esta fase).
 - `types.ts`: tipos de dominio (`SpeciesRecord`, `PondRecord`,
   `FishBatchRecord`, `StockingRecord`, `FishTransferRecord`,
   `FeedRecord`, `FeedInventoryMovementRecord`, `FeedingRecordRecord`,
-  `MortalityRecordRecord`, `SamplingRecord`, ...), independientes del
-  cliente Prisma generado — el navegador nunca importa código orientado
-  a Node. También define `EventAuditFields` (campos de auditoría
-  reducidos de los eventos append-only), reexportado desde
-  `repositories/base.ts` para no romper el resto del código.
+  `MortalityRecordRecord`, `SamplingRecord`, `WaterQualityRecordRecord`,
+  `TaskRecord`, ...), independientes del cliente Prisma generado — el
+  navegador nunca importa código orientado a Node. También define
+  `EventAuditFields` (campos de auditoría reducidos de los eventos
+  append-only), reexportado desde `repositories/base.ts` para no romper
+  el resto del código. `TaskRecord` es la única entidad de esta fase
+  que usa `AuditFields` completo (mutable, con `version`) en vez de
+  `EventAuditFields`.
 - `deviceId.ts` / `uuid.ts`: identificador de instalación persistente
   (`localStorage`) y generación de UUID v4 en el dispositivo para toda
   entidad nueva.
@@ -150,6 +166,14 @@ una, nunca dos implementaciones que puedan divergir:
 - `repositories/samplingRepository.ts` (Fase 3): `createSampling`
   calcula `averageWeightG` automáticamente y valida que el lote tenga
   registro en el estanque seleccionado.
+- `repositories/waterQualityRepository.ts` (Fase 4): `createWaterQualityRecord`
+  exige al menos un parámetro medido y valida rangos físicos
+  (`assertPhysicallyValidMeasurement`) antes de escribir; evento
+  append-only, igual criterio que `Sampling`.
+- `repositories/taskRepository.ts` (Fase 4): `createTask`/`updateTask`/
+  `completeTask`/`cancelTask`/`reopenTask`/`deleteTask` sobre
+  `createRecord`/`updateRecord`/`softDeleteRecord` — la única entidad
+  mutable de esta fase, mismo mecanismo que `speciesRepository.ts`.
 - `repositories/syncQueueRepository.ts`: lectura/escritura de la cola de
   sincronización y de `syncMeta` (cursor `lastSyncedAt`), usado solo por
   el motor de sync, nunca por la UI directamente.
@@ -204,16 +228,19 @@ servidor (API routes).
 - `pull/route.ts`: entrega cambios posteriores a `?since=`, calculando su
   propio cursor (`serverTime`) antes de leer, para que el cliente nunca
   dé por sincronizado un cambio que llegó a mitad de la consulta.
-  Entrega `fishBatches`/`stockings`/`fishTransfers` (Fase 2) y
+  Entrega `fishBatches`/`stockings`/`fishTransfers` (Fase 2),
   `feeds`/`feedInventoryMovements`/`feedingRecords`/`mortalityRecords`/
-  `samplings` (Fase 3); las entidades append-only se filtran por
-  `createdAt`, no `updatedAt` — nunca se actualizan. No cambió en la
-  Fase 3.5: siempre entrega las entidades reales, nunca el comando de
-  negocio compuesto que las creó.
+  `samplings` (Fase 3), y `waterQualityRecords`/`tasks` (Fase 4);
+  las entidades append-only se filtran por `createdAt`, no `updatedAt`
+  — nunca se actualizan (`waterQualityRecords` entre ellas; `tasks` sí
+  usa `updatedAt`, es mutable). No cambió en la Fase 3.5: siempre
+  entrega las entidades reales, nunca el comando de negocio compuesto
+  que las creó.
 - `_lib/applyOperation.ts`: aplica CREATE/UPDATE/DELETE con resolución de
   conflictos last-write-wins por número de versión para `Species`/`Pond`/
-  `FishBatch`/`Feed`. Para `FishTransfer` y `MortalityRecord` aplica
-  además la validación de balance de peces con bloqueo de concurrencia
+  `FishBatch`/`Feed`/`Task` (Fase 4: mismo mecanismo, ninguna lógica
+  nueva). Para `FishTransfer` y `MortalityRecord` aplica además la
+  validación de balance de peces con bloqueo de concurrencia
   (`pg_advisory_xact_lock` por `batchId`) descrita en `OFFLINE_SYNC.md`
   §8.3; para `FeedInventoryMovement` de tipo salida (`CONSUMPTION`,
   `ADJUSTMENT_OUT`, `LOSS`) aplica el mismo mecanismo con un lock por
@@ -228,6 +255,9 @@ servidor (API routes).
   (`applyFeedingRecordOperation`, `applyFeedInventoryMovementOperation`,
   `applyFeedOperation`) siguen existiendo, sin cambios, por compatibilidad
   con outbox pendiente de versiones anteriores de la app (§10.4).
+  `applyWaterQualityRecordOperation` (Fase 4) es un `upsert` simple, sin
+  ninguna validación de balance — `WaterQualityRecord` nunca la
+  necesita (§1 del encargo de Fase 4).
 
 ### `src/app/` — UI
 
@@ -236,9 +266,11 @@ servidor (API routes).
 - `page.tsx`: dashboard con conteos en vivo (`useLiveQuery` sobre Dexie):
   estanques/lotes activos, peces vivos y biomasa estimados (vía
   `getBatchProductionSummary`), mortalidad hoy/acumulada, alimento hoy/
-  este mes, stock total de alimento y alimentos bajo mínimo.
-  Deliberadamente sin analítica compleja todavía (§35 del encargo de
-  Fase 3).
+  este mes, stock total de alimento y alimentos bajo mínimo, y (Fase 4)
+  alertas de agua (`evaluateWaterQuality` sobre la última medición de
+  cada estanque), estanques sin medición reciente, tareas hoy/vencidas/
+  próximas. Deliberadamente sin analítica compleja todavía (§35 del
+  encargo de Fase 3).
 - `especies/page.tsx`: alta/edición completas (incluidos los campos
   productivos opcionales — peso objetivo, ciclo, temperatura/pH/
   oxígeno, FCR y mortalidad esperados) + lista en vivo, pensado para
@@ -247,9 +279,11 @@ servidor (API routes).
   listado con superficie/volumen/lotes (derivado de `getPondOccupancy`,
   nunca guardado); alta con geometría calculada-vs-manual
   (`PondGeometryFields`); ficha con pestañas Resumen/Producción/
-  Alimentación/Mortalidad/Muestreos/Historial, peces y biomasa
-  estimados del estanque, y accesos directos a los tres registros
-  rápidos con el estanque preseleccionado.
+  Alimentación/Mortalidad/Muestreos/Calidad del agua/Historial, peces y
+  biomasa estimados del estanque, y accesos directos a los cuatro
+  registros rápidos (incluida calidad del agua desde la Fase 4) con el
+  estanque preseleccionado. La pestaña de calidad del agua muestra la
+  última medición, sus alertas (si las hay) y el historial reciente.
 - `lotes/page.tsx` + `lotes/nuevo/page.tsx` + `lotes/[id]/page.tsx`:
   listado con ubicación derivada (`getBatchDistribution`); alta
   transaccional de lote + siembra inicial con preview de biomasa; ficha
@@ -269,6 +303,21 @@ servidor (API routes).
   preview de cuántos quedarán.
 - `muestreos/nuevo/page.tsx` (Fase 3): registro rápido con preview del
   peso promedio calculado.
+- `calidad-agua/page.tsx` + `calidad-agua/nueva/page.tsx` (Fase 4):
+  últimas mediciones por estanque, alertas activas, estanques sin
+  medición reciente, historial reciente; registro con estanque + fecha
+  obligatorios y los ocho parámetros opcionales, unidades visibles en
+  cada campo.
+- `tareas/page.tsx` + `tareas/nueva/page.tsx` (Fase 4): secciones
+  Vencidas/Hoy/Próximas/Completadas (colapsables, `classifyTask`),
+  check grande para completar/reabrir sin salir de la lista; alta con
+  título, fecha/hora, prioridad, estanque/lote opcionales.
+- `calendario/page.tsx` (Fase 4): vista Agenda (hoy + próximos 14 días
+  con eventos) y vista Mes (grid simple, sin librería de calendario),
+  combinando tareas pendientes con eventos históricos (muestreos,
+  mediciones de agua) y la cosecha estimada de cada lote
+  (`FishBatch.expectedHarvestDate`) — siempre etiquetados como "Tarea
+  pendiente" o "Evento histórico", nunca mezclados sin distinción.
 - `manifest.ts`, `icons/[size]/route.tsx`: metadatos de PWA (ver
   `IMPLEMENTATION_PLAN.md` §7).
 
@@ -276,11 +325,14 @@ servidor (API routes).
 
 - `layout/AppShell.tsx`: header con el badge de sincronización +
   navegación inferior mobile-first (Inicio, Especies, Lotes, Estanques,
-  Alimentación, Mortalidad).
-- `layout/QuickRegisterButton.tsx` (Fase 3): botón "+ Registrar"
-  flotante presente en cualquier pantalla (§38 del encargo), con acceso
-  directo a los tres registros rápidos (Alimentación/Mortalidad/
-  Muestreo) sin depender de estar dentro de una ficha concreta.
+  Alimentación, Mortalidad, Agua, Tareas).
+- `layout/QuickRegisterButton.tsx` (Fase 3, ampliado en Fase 4): botón
+  "+ Registrar" flotante presente en cualquier pantalla (§38 del
+  encargo de Fase 3), con acceso directo a los cuatro registros rápidos
+  (Alimentación/Mortalidad/Muestreo/Calidad del agua) sin depender de
+  estar dentro de una ficha concreta, más "Nueva tarea" separado por un
+  divisor visual (§28 del encargo de Fase 4: una tarea no es un
+  registro de producción).
 - `sync/SyncStatusBadge.tsx`: indicador 🟢/🟠/🔴/⚫ + botón "Sincronizar ahora".
 - `sync/SyncProvider.tsx`: arranca el motor de sync una vez para toda la app.
 - `pwa/ServiceWorkerRegister.tsx`, `pwa/InstallPrompt.tsx`: registro del service worker y aviso discreto de instalación.
@@ -290,7 +342,7 @@ servidor (API routes).
 
 ## 3. Modelo de datos actual
 
-`prisma/schema.prisma` (Fases 1, 2 y 3):
+`prisma/schema.prisma` (Fases 1, 2, 3 y 4):
 
 - **`Species`** — catálogo de especies productivo: nombre, peso objetivo,
   ciclo estimado, rangos de temperatura/pH/oxígeno, FCR y mortalidad
@@ -324,23 +376,35 @@ servidor (API routes).
   (§9.5).
 - **`Sampling`** — muestreo (append-only): lote, estanque, peces/peso
   muestreados, `averageWeightG` ya calculado.
+- **`WaterQualityRecord`** (Fase 4) — medición de calidad del agua
+  (append-only): estanque, lote opcional, fecha/hora, ocho parámetros
+  todos opcionales (temperatura, pH, oxígeno disuelto, transparencia,
+  amonio, nitrito, alcalinidad, nivel de agua) — requisito mínimo
+  (estanque + fecha + al menos un parámetro) validado en la capa de
+  aplicación, no en el esquema. **Nunca** un `pond.currentPh` mutable
+  — ver `OFFLINE_SYNC.md` §11.1.
+- **`Task`** (Fase 4) — tarea manual: título, fecha/hora, prioridad,
+  estado (`TaskStatus`), estanque/lote opcionales, responsable. La
+  **única** entidad mutable introducida después de la Fase 1 en este
+  dominio — ver `OFFLINE_SYNC.md` §11.3.
 - **`SyncOperation`** — registro de operaciones de sync procesadas por el
   servidor; `operationId` es la clave de idempotencia.
 
-`Species`, `Pond`, `FishBatch` y `Feed` comparten los mismos campos de
-auditoría (`createdAt`, `updatedAt`, `deletedAt`, `version`, `deviceId`,
-`createdBy`, `updatedBy`) tanto en Prisma como en Dexie, con los mismos
-nombres — el mapeo entre ambos lados es directo, y `version` es la base
-de la resolución de conflictos last-write-wins (§6 de `OFFLINE_SYNC.md`).
-`Stocking`, `FishTransfer`, `FeedInventoryMovement`, `FeedingRecord`,
-`MortalityRecord` y `Sampling`, al ser append-only, no tienen `version`
-ni `updatedAt`: nunca se editan, así que no hay nada que resolver por
-ese mecanismo — su único conflicto posible es el de balance (§8.3, §9.4).
+`Species`, `Pond`, `FishBatch`, `Feed` y `Task` comparten los mismos
+campos de auditoría (`createdAt`, `updatedAt`, `deletedAt`, `version`,
+`deviceId`, `createdBy`, `updatedBy`) tanto en Prisma como en Dexie, con
+los mismos nombres — el mapeo entre ambos lados es directo, y `version`
+es la base de la resolución de conflictos last-write-wins (§6 de
+`OFFLINE_SYNC.md`). `Stocking`, `FishTransfer`, `FeedInventoryMovement`,
+`FeedingRecord`, `MortalityRecord`, `Sampling` y `WaterQualityRecord`,
+al ser append-only, no tienen `version` ni `updatedAt`: nunca se
+editan, así que no hay nada que resolver por ese mecanismo — su único
+conflicto posible sería el de balance (§8.3, §9.4), y
+`WaterQualityRecord` ni siquiera ese: no valida ningún balance.
 
-El modelo de datos completo del dominio piscícola restante (calidad de
-agua, cosechas, ventas, rentabilidad...) está documentado en
-`IMPLEMENTATION_PLAN.md` §4 y se implementa de forma incremental en las
-siguientes fases.
+El modelo de datos completo del dominio piscícola restante (cosechas,
+ventas, rentabilidad...) está documentado en `IMPLEMENTATION_PLAN.md`
+§4 y se implementa de forma incremental en las siguientes fases.
 
 ## 4. Decisiones de arquitectura tomadas durante la Fase 1
 
@@ -496,12 +560,50 @@ para el detalle completo de cada punto.
    conflicto se ve como un único incidente comprensible, nunca desglosado
    en sus escrituras internas.
 
+## 4.4 Decisiones de arquitectura tomadas durante la Fase 4
+
+1. **`WaterQualityRecord` sigue el mismo patrón de ledger que todo el
+   resto del dominio**: sin campo mutable, historial completo, última
+   medición siempre derivada. La única pieza nueva de diseño fue
+   decidir CÓMO derivar "la última" cuando dos mediciones comparten
+   fecha (`getLatestMeasurement`/`compareMeasurementRecency`,
+   `OFFLINE_SYNC.md` §11.1) — encontrado escribiendo el E2E de esta
+   fase, no en el diseño original.
+2. **Las alertas de calidad del agua reutilizan los rangos que
+   `Species` ya tenía desde la Fase 1/2** (`minTemperatureC`/
+   `maxTemperatureC`/`minPh`/`maxPh`/`minDissolvedOxygenMgL`) — no se
+   creó ninguna tabla nueva de "rangos recomendados". Evaluar contra
+   TODAS las especies presentes en un estanque (no una sola) fue una
+   decisión deliberada (§5 del encargo): un estanque mixto puede tener
+   parámetros aceptables para una especie e insuficientes para otra.
+3. **`Task` es la primera entidad mutable nueva desde la Fase 1** — se
+   reutilizó el mecanismo de `createRecord`/`updateRecord` y
+   last-write-wins tal cual, sin ningún ajuste: la arquitectura de
+   conflictos ya estaba diseñada para esto desde el principio, no hubo
+   que extenderla.
+4. **El calendario no introdujo ninguna tabla nueva**: es una vista que
+   combina `Task` con eventos ya existentes en otras tablas
+   (`FishBatch.expectedHarvestDate`, `Sampling`, `WaterQualityRecord`)
+   — evitar una tabla de "eventos de calendario" separada, que hubiera
+   duplicado datos que ya viven en su tabla de origen.
+5. **Ninguna alerta se persiste**: se evalúan siempre en el momento, a
+   partir del historial ya sincronizado en IndexedDB — evita el riesgo
+   de una alerta guardada quedando obsoleta si cambia el rango de la
+   especie o se corrige una medición.
+6. **Validación física (servidor) espejo de la del cliente**: los
+   mismos límites (`pH` 0-14, temperatura -5 a 45 °C, el resto
+   no-negativos) se repiten como bounds de Zod en
+   `validation/sync.ts` — nunca se confía solo en que el cliente ya
+   validó (§42 del encargo).
+
 ## 5. Qué NO está implementado todavía
 
-Deliberadamente fuera de alcance de la Fase 3 (ver `IMPLEMENTATION_PLAN.md`
-§9 para el orden de las fases siguientes): compras completas y
+Deliberadamente fuera de alcance de la Fase 4 (ver `IMPLEMENTATION_PLAN.md`
+§9 para el orden de las fases siguientes): tratamientos/medicamentos,
+diagnóstico de enfermedades, sensores IoT, compras completas y
 proveedores avanzados, gastos generales, ventas, cosechas, rentabilidad
-completa, calidad de agua, sensores, IA, reportes PDF avanzados, tareas,
-calendario, autenticación, roles de usuario, gráficos avanzados,
-notificaciones push, y el aviso interactivo "nueva versión disponible"
-del service worker (por ahora se actualiza solo, sin avisar).
+completa, IA, reportes PDF avanzados, autenticación, roles de usuario,
+gráficos avanzados, notificaciones push, eventos automáticos de
+producción creados desde el calendario, y el aviso interactivo "nueva
+versión disponible" del service worker (por ahora se actualiza solo,
+sin avisar).

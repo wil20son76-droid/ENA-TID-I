@@ -7,20 +7,23 @@ completa y [`ARCHITECTURE.md`](./ARCHITECTURE.md) /
 [`OFFLINE_SYNC.md`](./OFFLINE_SYNC.md) para el detalle técnico del modo
 offline y la sincronización.
 
-Estado actual: **Fase 3 — operación diaria**. Sobre la base técnica
-offline/sync (Fase 1) y el núcleo productivo (Fase 2: Especies,
-Estanques, Lotes, Siembras, Traslados) se añadió la operación del
-día a día: catálogo de alimentos, inventario de alimento (ledger de
-movimientos, nunca un stock mutable), registro de alimentación,
-mortalidad integrada en el ledger de peces, muestreos con peso
-estimado, biomasa, supervivencia, crecimiento y FCR operacional —
-todo offline-first, con validación de balances y resolución de
-conflictos multi-dispositivo tanto para peces como para alimento. El
-resto del dominio (calidad de agua, cosechas, ventas, rentabilidad...)
-se documenta en el plan y se construye en fases posteriores — ver
+Estado actual: **Fase 4 — calidad del agua, alertas y planificación**.
+Sobre la base técnica offline/sync (Fase 1), el núcleo productivo
+(Fase 2: Especies, Estanques, Lotes, Siembras, Traslados), la operación
+diaria (Fase 3: alimento, alimentación, mortalidad, muestreos) y el
+hardening de consistencia de sincronización (Fase 3.5), se añadió:
+registro de calidad del agua (histórico append-only, nunca un
+`pond.currentPh` mutable) con alertas operativas evaluadas contra el
+rango de cada especie presente en el estanque, tareas manuales
+(mutables, con resolución de conflictos por versión) y un calendario
+simple (agenda + vista mensual) — todo offline-first, con las alertas
+calculadas 100% en el dispositivo, sin ninguna llamada de red. El resto
+del dominio (cosechas, ventas, rentabilidad...) se documenta en el plan
+y se construye en fases posteriores — ver
 [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) y las secciones
-["Modelo de producción piscícola" (Fase 2)](./OFFLINE_SYNC.md#8-modelo-de-producción-piscícola-fase-2)
-y ["Operación diaria" (Fase 3)](./OFFLINE_SYNC.md#9-operación-diaria-alimento-mortalidad-y-muestreos-fase-3)
+["Modelo de producción piscícola" (Fase 2)](./OFFLINE_SYNC.md#8-modelo-de-producción-piscícola-fase-2),
+["Operación diaria" (Fase 3)](./OFFLINE_SYNC.md#9-operación-diaria-alimento-mortalidad-y-muestreos-fase-3)
+y ["Calidad del agua, alertas y planificación" (Fase 4)](./OFFLINE_SYNC.md#11-calidad-del-agua-alertas-y-planificación-fase-4)
 de `OFFLINE_SYNC.md`.
 
 ## Stack
@@ -89,7 +92,7 @@ Abre <http://localhost:3000>.
 | `npm run typecheck` | Comprobación de tipos (`tsc --noEmit`) |
 | `npm run test` | Tests unitarios y de integración (Vitest) |
 | `npm run test:watch` | Vitest en modo watch |
-| `npm run test:e2e` | Tests E2E offline (Playwright; compila y levanta un build de producción automáticamente): escenario base (`tests/e2e/offline.spec.ts`), producción piscícola (`tests/e2e/production.spec.ts`) y operación diaria (`tests/e2e/dailyOperations.spec.ts`) |
+| `npm run test:e2e` | Tests E2E offline (Playwright; compila y levanta un build de producción automáticamente): escenario base (`tests/e2e/offline.spec.ts`), producción piscícola (`tests/e2e/production.spec.ts`), operación diaria (`tests/e2e/dailyOperations.spec.ts`) y calidad del agua + tareas (`tests/e2e/waterQualityAndTasks.spec.ts`) |
 | `npm run db:migrate` | Aplica migraciones de Prisma (desarrollo) |
 | `npm run db:migrate:deploy` | Aplica migraciones ya creadas (producción/CI) |
 | `npm run db:generate` | Regenera el cliente de Prisma |
@@ -137,7 +140,11 @@ npm run test
 # diaria (alimentación + mortalidad + muestreo 100% offline sobre un
 # lote de 1000 peces, cerrar/reabrir sin conexión y verificar que la
 # ficha sigue mostrando los mismos peces/peso/biomasa/stock, reconectar
-# y comprobar en Postgres que no hay duplicados).
+# y comprobar en Postgres que no hay duplicados) + calidad del agua y
+# tareas (medición + dos tareas 100% offline, cerrar/reabrir sin
+# conexión, una alerta de oxígeno bajo generada localmente sin
+# conexión, completar una tarea offline, reconectar y comprobar en
+# Postgres que no hay duplicados).
 npm run test:e2e
 ```
 
@@ -175,12 +182,16 @@ prisma/              Esquema, migraciones y seed de Prisma
 src/
   app/                Rutas (App Router): páginas y API routes
     estanques/        Listado, alta y ficha de estanque (con pestañas
-                       de producción/alimentación/mortalidad/muestreos)
+                       de producción/alimentación/mortalidad/
+                       muestreos/calidad del agua)
     lotes/             Listado, alta (lote+siembra) y ficha de lote
     alimentacion/      Resumen diario, registro rápido de alimentación
     alimentos/         Catálogo de alimentos + stock inicial
     mortalidad/        Resumen y registro rápido de mortalidad
     muestreos/         Registro rápido de muestreo
+    calidad-agua/      Últimas mediciones, alertas activas, registro
+    tareas/            Hoy/Próximas/Vencidas/Completadas, crear/completar
+    calendario/        Agenda + vista mensual simple
   components/         Componentes de UI (layout, sync, pwa, estanques)
   hooks/              Hooks de React (estado de sincronización)
   lib/
@@ -188,16 +199,18 @@ src/
     domain/           Funciones puras de dominio (ledger de peces y de
                        alimento, biomasa, peso estimado, crecimiento,
                        FCR, código de lote, geometría de estanque,
-                       formato numérico) — sin dependencias de Dexie ni
-                       de Prisma, usadas por igual desde el cliente y
-                       el servidor
+                       formato numérico, alertas de calidad del agua,
+                       clasificación de tareas) — sin dependencias de
+                       Dexie ni de Prisma, usadas por igual desde el
+                       cliente y el servidor
     server/           Cliente Prisma (servidor)
     sync/             Motor de sincronización cliente + protocolo
     validation/       Esquemas Zod compartidos cliente/servidor
     labels.ts         Textos en español de enums de dominio
   test/               Configuración de Vitest
 tests/e2e/            Tests Playwright: escenario offline base,
-                       producción piscícola y operación diaria
+                       producción piscícola, operación diaria y
+                       calidad del agua + tareas
 ```
 
 ## Documentación
