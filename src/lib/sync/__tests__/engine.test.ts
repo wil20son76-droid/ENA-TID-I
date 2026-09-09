@@ -19,6 +19,11 @@ function emptyPullResponse() {
     fishBatches: [],
     stockings: [],
     fishTransfers: [],
+    feeds: [],
+    feedInventoryMovements: [],
+    feedingRecords: [],
+    mortalityRecords: [],
+    samplings: [],
     serverTime: new Date().toISOString(),
   };
 }
@@ -30,6 +35,11 @@ describe("runSync", () => {
     await db.fishBatches.clear();
     await db.stockings.clear();
     await db.fishTransfers.clear();
+    await db.feeds.clear();
+    await db.feedInventoryMovements.clear();
+    await db.feedingRecords.clear();
+    await db.mortalityRecords.clear();
+    await db.samplings.clear();
     await db.syncQueue.clear();
     await db.syncMeta.clear();
     vi.restoreAllMocks();
@@ -198,6 +208,11 @@ describe("runSync", () => {
         fishBatches: [],
         stockings: [],
         fishTransfers: [],
+        feeds: [],
+        feedInventoryMovements: [],
+        feedingRecords: [],
+        mortalityRecords: [],
+        samplings: [],
         serverTime: now,
       });
     });
@@ -286,6 +301,11 @@ describe("runSync", () => {
             deletedAt: null,
           },
         ],
+        feeds: [],
+        feedInventoryMovements: [],
+        feedingRecords: [],
+        mortalityRecords: [],
+        samplings: [],
         serverTime: now,
       });
     });
@@ -296,6 +316,132 @@ describe("runSync", () => {
     expect((await db.fishBatches.get(batchId))?.code).toBe("PAC-2026-001-0000");
     expect((await db.stockings.get(stockingId))?.quantity).toBe(1000);
     expect((await db.fishTransfers.get(transferId))?.quantity).toBe(400);
+
+    const queue = await db.syncQueue.toArray();
+    expect(queue).toHaveLength(0);
+  });
+
+  it("pull también aplica Feed/FeedInventoryMovement/FeedingRecord/MortalityRecord/Sampling remotos (Fase 3)", async () => {
+    const now = new Date().toISOString();
+    const feedId = crypto.randomUUID();
+    const movementId = crypto.randomUUID();
+    const feedingId = crypto.randomUUID();
+    const mortalityId = crypto.randomUUID();
+    const samplingId = crypto.randomUUID();
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/sync/push")) {
+        return jsonResponse({ results: [], serverTime: now });
+      }
+      return jsonResponse({
+        species: [],
+        ponds: [],
+        fishBatches: [],
+        stockings: [],
+        fishTransfers: [],
+        feeds: [
+          {
+            id: feedId,
+            name: "Crecimiento 32%",
+            brand: null,
+            proteinPercent: null,
+            pelletSizeMm: null,
+            bagWeightKg: null,
+            defaultBagPrice: null,
+            defaultCostPerKg: null,
+            recommendedStage: null,
+            notes: null,
+            minimumStockKg: null,
+            active: true,
+            createdAt: now,
+            updatedAt: now,
+            deletedAt: null,
+            version: 1,
+            deviceId: "otro-dispositivo",
+            createdBy: null,
+            updatedBy: null,
+          },
+        ],
+        feedInventoryMovements: [
+          {
+            id: movementId,
+            feedId,
+            movementType: "INITIAL_STOCK",
+            quantityKg: 500,
+            unitCostPerKg: null,
+            totalCost: null,
+            date: now,
+            sourceType: null,
+            sourceId: null,
+            notes: null,
+            deviceId: "otro-dispositivo",
+            createdAt: now,
+            deletedAt: null,
+          },
+        ],
+        feedingRecords: [
+          {
+            id: feedingId,
+            batchId: "batch-x",
+            pondId: "pond-x",
+            feedId,
+            date: now,
+            time: null,
+            quantityKg: 18,
+            shift: "MORNING",
+            responsibleName: null,
+            notes: null,
+            deviceId: "otro-dispositivo",
+            createdAt: now,
+            deletedAt: null,
+          },
+        ],
+        mortalityRecords: [
+          {
+            id: mortalityId,
+            batchId: "batch-x",
+            pondId: "pond-x",
+            date: now,
+            quantity: 3,
+            estimatedAverageWeightG: null,
+            cause: "UNKNOWN",
+            notes: null,
+            responsibleName: null,
+            deviceId: "otro-dispositivo",
+            createdAt: now,
+            deletedAt: null,
+          },
+        ],
+        samplings: [
+          {
+            id: samplingId,
+            batchId: "batch-x",
+            pondId: "pond-x",
+            date: now,
+            sampleFishCount: 30,
+            totalSampleWeightKg: 15.3,
+            averageWeightG: 510,
+            averageLengthCm: null,
+            notes: null,
+            responsibleName: null,
+            deviceId: "otro-dispositivo",
+            createdAt: now,
+            deletedAt: null,
+          },
+        ],
+        serverTime: now,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runSync();
+
+    expect((await db.feeds.get(feedId))?.name).toBe("Crecimiento 32%");
+    expect((await db.feedInventoryMovements.get(movementId))?.quantityKg).toBe(500);
+    expect((await db.feedingRecords.get(feedingId))?.quantityKg).toBe(18);
+    expect((await db.mortalityRecords.get(mortalityId))?.quantity).toBe(3);
+    expect((await db.samplings.get(samplingId))?.averageWeightG).toBe(510);
 
     const queue = await db.syncQueue.toArray();
     expect(queue).toHaveLength(0);

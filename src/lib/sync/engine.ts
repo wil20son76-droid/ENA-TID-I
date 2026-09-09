@@ -130,11 +130,18 @@ async function pullAndMerge(): Promise<void> {
 
   await db.transaction(
     "rw",
-    db.species,
-    db.ponds,
-    db.fishBatches,
-    db.stockings,
-    db.fishTransfers,
+    [
+      db.species,
+      db.ponds,
+      db.fishBatches,
+      db.stockings,
+      db.fishTransfers,
+      db.feeds,
+      db.feedInventoryMovements,
+      db.feedingRecords,
+      db.mortalityRecords,
+      db.samplings,
+    ],
     async () => {
       for (const species of response.species) {
         await db.species.put(species);
@@ -150,6 +157,21 @@ async function pullAndMerge(): Promise<void> {
       }
       for (const transfer of response.fishTransfers) {
         await db.fishTransfers.put(transfer);
+      }
+      for (const feed of response.feeds) {
+        await db.feeds.put(feed);
+      }
+      for (const movement of response.feedInventoryMovements) {
+        await db.feedInventoryMovements.put(movement);
+      }
+      for (const feeding of response.feedingRecords) {
+        await db.feedingRecords.put(feeding);
+      }
+      for (const mortality of response.mortalityRecords) {
+        await db.mortalityRecords.put(mortality);
+      }
+      for (const sampling of response.samplings) {
+        await db.samplings.put(sampling);
       }
     },
   );
