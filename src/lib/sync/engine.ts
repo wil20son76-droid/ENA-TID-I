@@ -41,6 +41,27 @@ function backoffDelayMs(retryCount: number): number {
 
 function isReadyForRetry(item: SyncQueueRecord, now: number, force: boolean): boolean {
   if (item.status === "pending") return true;
+  // Fase 7 (§"Hardening de sincronización"): un elemento en "syncing" al
+  // EMPEZAR un ciclo nuevo nunca puede ser un envío realmente en curso —
+  // `runSync` se protege con `isRunning` contra dos ciclos concurrentes
+  // dentro de la misma página, así que si llegamos aquí es porque la
+  // página que lo dejó en "syncing" (tras `markSyncing`, antes de que
+  // `pushOperations` resolviera) se cerró o navegó a otra URL de por
+  // medio — típicamente el evento "online" dispara un ciclo automático en
+  // la página actual justo antes de que algo la reemplace (recarga,
+  // cierre de la PWA, el sistema operativo suspendiéndola en segundo
+  // plano). Ese fetch en camino nunca va a resolver: su continuación
+  // (`markSynced`/`markError`) vivía en un contexto de JS que ya no
+  // existe. Sin este caso, el dato queda invisible para siempre —
+  // `collectEligibleOperations` solo miraba "pending"/"error" — con el
+  // indicador mostrando "Sincronizado" aunque el dato nunca llegó al
+  // servidor (visto y reproducido en E2E: economics.spec.ts/
+  // dailyOperations.spec.ts, reconexión seguida de una navegación).
+  // Reintentar sin backoff es seguro: si el envío anterior sí llegó a
+  // aplicarse en el servidor a pesar de que el cliente nunca vio la
+  // respuesta, la idempotencia por operationId (push/route.ts) responde
+  // "duplicate" sin volver a tocar la base.
+  if (item.status === "syncing") return true;
   if (item.status !== "error") return false;
   if (force) return true;
   const lastAttemptMs = new Date(item.updatedAt).getTime();
@@ -55,11 +76,15 @@ function isReadyForRetry(item: SyncQueueRecord, now: number, force: boolean): bo
 // no sustituye el backoff/reintento de `isReadyForRetry` — se aplica
 // después, solo sobre lo que ya está listo para intentarse.
 async function collectEligibleOperations(force: boolean): Promise<SyncQueueRecord[]> {
-  const [pending, errored] = await Promise.all([
+  const [pending, errored, stuckSyncing] = await Promise.all([
     listByStatus("pending"),
     listByStatus("error"),
+    // Ver la nota junto a `isReadyForRetry`: "syncing" al inicio de un
+    // ciclo es siempre un abandono de un intento anterior, no un envío en
+    // curso.
+    listByStatus("syncing"),
   ]);
-  const all = [...pending, ...errored];
+  const all = [...pending, ...errored, ...stuckSyncing];
   const now = Date.now();
   const readyForRetry = all.filter((item) => isReadyForRetry(item, now, force));
   return selectReadyOperations(readyForRetry, all);
@@ -123,13 +148,20 @@ async function pushBatch(deviceId: string, batch: SyncQueueRecord[]): Promise<vo
       await markSynced(syncedIds);
     }
   } catch (error) {
-    // Fallo de red (sin conexión real, servidor caído, timeout, etc.): el
-    // dato ya está seguro en IndexedDB, así que esto nunca es una pérdida
-    // de información — solo queda pendiente de un próximo intento.
+    // Fallo de red (sin conexión real, servidor caído, timeout, etc.) o de
+    // autenticación (sesión expirada/revocada, ver SyncAuthError en
+    // client.ts): el dato ya está seguro en IndexedDB, así que esto nunca
+    // es una pérdida de información — solo queda pendiente de un próximo
+    // intento. Se refleja también en el estado GLOBAL (no solo por
+    // elemento): un fallo de autenticación nunca se resuelve solo
+    // reintentando — la persona necesita ver "inicia sesión de nuevo"
+    // cuanto antes, no solo un ícono genérico de error.
     const message = error instanceof Error ? error.message : "Error de red al sincronizar.";
     await Promise.all(batch.map((item) => markError(item.id, message)));
     if (isNetworkError(error)) {
       setSyncStatus({ connectivity: "offline" });
+    } else {
+      setSyncStatus({ lastError: message });
     }
   }
 }

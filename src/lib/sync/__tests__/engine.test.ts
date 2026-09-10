@@ -129,6 +129,44 @@ describe("runSync", () => {
     expect(queue[0].retryCount).toBe(2);
   });
 
+  it("Fase 7 (hardening): un elemento abandonado en 'syncing' se reintenta y se sincroniza, en vez de quedar invisible para siempre", async () => {
+    // Reproduce el escenario real encontrado en E2E (economics.spec.ts/
+    // dailyOperations.spec.ts, paso "reconectar y sincronizar"): el evento
+    // "online" dispara un ciclo automático que llama a `markSyncing` y
+    // luego, ANTES de que la respuesta de /api/sync/push llegue, la página
+    // navega a otra URL o se cierra — el fetch en curso nunca resuelve NI
+    // rechaza porque el contexto de JS que lo esperaba ya no existe. El
+    // elemento queda en "syncing" para siempre: antes de este fix,
+    // `collectEligibleOperations` solo miraba "pending"/"error", así que
+    // ningún ciclo futuro (ni el automático ni "Sincronizar ahora") volvía
+    // a intentarlo — el badge mostraba "Sincronizado" con el dato nunca
+    // aplicado en el servidor.
+    const species = await createSpecies({ commonName: "Pacú" });
+    const [queued] = await db.syncQueue.toArray();
+    await db.syncQueue.update(queued.id, { status: "syncing" });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/sync/push")) {
+        const before = await db.syncQueue.toArray();
+        return jsonResponse({
+          results: before.map((op) => ({ id: op.id, status: "applied" })),
+          serverTime: new Date().toISOString(),
+        });
+      }
+      return jsonResponse(emptyPullResponse());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runSync();
+
+    expect(fetchMock).toHaveBeenCalled();
+    const queue = await db.syncQueue.toArray();
+    expect(queue).toHaveLength(0); // se reintentó, se aplicó y se purgó — no quedó huérfano
+    const stored = await db.species.get(species.id);
+    expect(stored?.commonName).toBe("Pacú");
+  });
+
   it("conflicto de versión: se marca error con un mensaje explicativo, no se pierde el intento", async () => {
     await createSpecies({ commonName: "Pacú" });
 

@@ -1,6 +1,15 @@
 // Cliente HTTP delgado hacia /api/sync/push y /api/sync/pull. No contiene
 // lógica de reintentos ni de estado: eso vive en engine.ts. Este módulo
 // solo sabe hablar el protocolo (IMPLEMENTATION_PLAN.md §6.3).
+//
+// Fase 7: ambas rutas exigen un token de sesión (Authorization: Bearer).
+// `SyncAuthError` distingue un rechazo de autenticación (401 — sesión
+// ausente/expirada/revocada) de un fallo de red real o un error de
+// servidor: engine.ts la usa para mostrar "inicia sesión de nuevo para
+// sincronizar" en vez de tratarlo como "sin conexión" (nunca se pierde el
+// dato local en ningún caso — sigue en el outbox hasta el próximo intento
+// exitoso).
+import { getSession } from "../auth/session";
 import type {
   CustomerRecord,
   ExpenseRecord,
@@ -26,6 +35,13 @@ import type {
   WaterQualityRecordRecord,
 } from "../db/types";
 
+export class SyncAuthError extends Error {}
+
+function authHeader(): Record<string, string> {
+  const session = getSession();
+  return session ? { authorization: `Bearer ${session.token}` } : {};
+}
+
 export type PushResultStatus = "applied" | "duplicate" | "conflict" | "error";
 
 export interface PushResultItem {
@@ -45,7 +61,7 @@ export async function pushOperations(
 ): Promise<PushResponse> {
   const response = await fetch("/api/sync/push", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...authHeader() },
     body: JSON.stringify({
       deviceId,
       operations: operations.map((op) => ({
@@ -59,6 +75,9 @@ export async function pushOperations(
     }),
   });
 
+  if (response.status === 401) {
+    throw new SyncAuthError("La sesión expiró o fue revocada. Inicia sesión de nuevo para sincronizar.");
+  }
   if (!response.ok) {
     throw new Error(`Fallo en /api/sync/push (HTTP ${response.status})`);
   }
@@ -97,7 +116,10 @@ export async function pullChanges(since: string | null): Promise<PullResponse> {
     url.searchParams.set("since", since);
   }
 
-  const response = await fetch(url.toString());
+  const response = await fetch(url.toString(), { headers: { ...authHeader() } });
+  if (response.status === 401) {
+    throw new SyncAuthError("La sesión expiró o fue revocada. Inicia sesión de nuevo para sincronizar.");
+  }
   if (!response.ok) {
     throw new Error(`Fallo en /api/sync/pull (HTTP ${response.status})`);
   }

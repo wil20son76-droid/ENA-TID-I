@@ -80,6 +80,11 @@ export function SyncStatusBadge() {
       <span className="text-xs text-zinc-500 dark:text-zinc-400">
         Última sincronización: {formatLastSyncedAt(lastSyncedAt)}
       </span>
+      {mounted && status.lastError && (
+        <span className="w-full text-xs text-red-600 dark:text-red-400" role="alert">
+          {status.lastError}
+        </span>
+      )}
       <button
         type="button"
         onClick={() => void runSync({ force: true })}

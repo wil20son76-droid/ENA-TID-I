@@ -14,9 +14,14 @@ export async function listByStatus(
 }
 
 export async function countPending(): Promise<number> {
+  // "syncing" cuenta como pendiente (Fase 7, §"Hardening de
+  // sincronización"): ver la nota junto a `isReadyForRetry` en engine.ts
+  // sobre por qué un elemento en "syncing" al INICIO de un ciclo siempre
+  // es un abandono de un intento anterior, nunca uno realmente en curso.
   const pending = await db.syncQueue.where("status").equals("pending").count();
   const errored = await db.syncQueue.where("status").equals("error").count();
-  return pending + errored;
+  const syncing = await db.syncQueue.where("status").equals("syncing").count();
+  return pending + errored + syncing;
 }
 
 export async function markSyncing(ids: string[]): Promise<void> {

@@ -28,9 +28,14 @@ export function useSyncStatus(): SyncStatus {
     getSyncStatus,
   );
 
+  // "syncing" cuenta como pendiente (Fase 7): un elemento que se quedó en
+  // ese estado nunca vuelve a "pending"/"error" por sí solo si la página
+  // que lo estaba enviando se cerró/navegó antes de que la respuesta
+  // llegara — sin esto, el badge mostraría "Sincronizado" con datos que en
+  // realidad nunca llegaron al servidor. Ver la nota en engine.ts.
   const pendingCount =
     useLiveQuery(
-      () => db.syncQueue.where("status").anyOf("pending", "error").count(),
+      () => db.syncQueue.where("status").anyOf("pending", "error", "syncing").count(),
       [],
     ) ?? 0;
 
