@@ -24,12 +24,13 @@ export interface CreateFishTransferInput {
  * mortalidad cuenta como salida (§17 de la Fase 3), igual que un traslado.
  */
 export async function getAvailableInPond(batchId: string, pondId: string): Promise<number> {
-  const [stockings, transfers, mortalities] = await Promise.all([
+  const [stockings, transfers, mortalities, harvests] = await Promise.all([
     db.stockings.where("batchId").equals(batchId).toArray(),
     db.fishTransfers.where("batchId").equals(batchId).toArray(),
     db.mortalityRecords.where("batchId").equals(batchId).toArray(),
+    db.harvests.where("batchId").equals(batchId).toArray(),
   ]);
-  return getBatchPondBalance(stockings, transfers, mortalities, batchId, pondId);
+  return getBatchPondBalance(stockings, transfers, mortalities, harvests, batchId, pondId);
 }
 
 /**

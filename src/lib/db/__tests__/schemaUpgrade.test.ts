@@ -281,3 +281,83 @@ describe("Dexie: upgrade de esquema v3 -> v4 sin perder datos (Fase 4)", () => {
     upgradedDb.close();
   });
 });
+
+describe("Dexie: upgrade de esquema v4 -> v5 sin perder datos (Fase 5)", () => {
+  beforeEach(async () => {
+    await Dexie.delete(DB_NAME);
+  });
+
+  it("conserva un lote creado en v4 al reabrir con el esquema v5, y las tablas nuevas quedan disponibles", async () => {
+    class LegacyV4Database extends Dexie {
+      fishBatches!: EntityTable<{ id: string; code: string }, "id">;
+
+      constructor() {
+        super(DB_NAME);
+        this.version(1).stores({
+          species: "id, active, updatedAt",
+          ponds: "id, code, status, updatedAt",
+          syncQueue: "id, status, entityType, [entityType+entityId], createdAt",
+          syncMeta: "key",
+        });
+        this.version(2).stores({
+          ponds: "id, code, status, updatedAt, active",
+          fishBatches: "id, code, speciesId, status, updatedAt",
+          stockings: "id, batchId, pondId, [batchId+pondId], createdAt",
+          fishTransfers: "id, batchId, fromPondId, toPondId, createdAt",
+        });
+        this.version(3).stores({
+          feeds: "id, active, updatedAt",
+          feedInventoryMovements:
+            "id, feedId, [feedId+date], movementType, [sourceType+sourceId], createdAt",
+          feedingRecords: "id, batchId, pondId, feedId, date, createdAt",
+          mortalityRecords: "id, batchId, pondId, [batchId+pondId], date, createdAt",
+          samplings: "id, batchId, pondId, [batchId+pondId], date, createdAt",
+        });
+        this.version(4).stores({
+          waterQualityRecords: "id, pondId, batchId, [pondId+date], date, createdAt",
+          tasks: "id, dueDate, status, pondId, batchId, updatedAt",
+        });
+      }
+    }
+
+    const legacyDb = new LegacyV4Database();
+    await legacyDb.open();
+    await legacyDb.fishBatches.add({ id: "batch-legacy-3", code: "PAC-2026-003-0000" });
+    legacyDb.close();
+
+    const upgradedDb = new AppDatabase();
+    await upgradedDb.open();
+
+    const preserved = await upgradedDb.fishBatches.get("batch-legacy-3");
+    expect(preserved?.code).toBe("PAC-2026-003-0000");
+
+    expect(await upgradedDb.farmSettings.count()).toBe(0);
+    expect(await upgradedDb.suppliers.count()).toBe(0);
+    expect(await upgradedDb.customers.count()).toBe(0);
+    expect(await upgradedDb.purchases.count()).toBe(0);
+    expect(await upgradedDb.purchaseLines.count()).toBe(0);
+    expect(await upgradedDb.expenses.count()).toBe(0);
+    expect(await upgradedDb.harvests.count()).toBe(0);
+    expect(await upgradedDb.sales.count()).toBe(0);
+    expect(await upgradedDb.saleLines.count()).toBe(0);
+
+    await upgradedDb.harvests.add({
+      id: "harvest-1",
+      batchId: "batch-legacy-3",
+      pondId: "pond-1",
+      date: new Date().toISOString(),
+      quantityFish: 200,
+      totalWeightKg: 300,
+      averageWeightG: 1500,
+      harvestType: "PARTIAL",
+      responsibleName: null,
+      notes: null,
+      deviceId: "device-test",
+      createdAt: new Date().toISOString(),
+      deletedAt: null,
+    });
+    expect(await upgradedDb.harvests.count()).toBe(1);
+
+    upgradedDb.close();
+  });
+});

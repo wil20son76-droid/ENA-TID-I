@@ -325,6 +325,194 @@ export interface TaskRecord extends TaskFields, AuditFields {
   id: string;
 }
 
+// --- Fase 5: economía y cierre productivo ---
+
+/** Configuración de moneda de la finca (§2 del encargo). Singleton: `id` siempre `"default"`. */
+export interface FarmSettingsFields {
+  currencyCode: string;
+  currencySymbol: string;
+}
+
+export interface FarmSettingsRecord extends FarmSettingsFields, AuditFields {
+  id: string;
+}
+
+export const FARM_SETTINGS_ID = "default";
+
+/** Proveedor (§4-§5): mutable, mismo criterio que Species/Pond/Feed. */
+export interface SupplierFields {
+  name: string;
+  contactName: string | null;
+  phone: string | null;
+  whatsapp: string | null;
+  locality: string | null;
+  address: string | null;
+  notes: string | null;
+  active: boolean;
+}
+
+export interface SupplierRecord extends SupplierFields, AuditFields {
+  id: string;
+}
+
+export type CustomerType =
+  | "INDIVIDUAL"
+  | "RESTAURANT"
+  | "MARKET"
+  | "DISTRIBUTOR"
+  | "WHOLESALER"
+  | "OTHER";
+
+/** Cliente/comprador (§6-§7): mismo criterio que Supplier. */
+export interface CustomerFields {
+  name: string;
+  type: CustomerType;
+  phone: string | null;
+  whatsapp: string | null;
+  locality: string | null;
+  address: string | null;
+  notes: string | null;
+  active: boolean;
+}
+
+export interface CustomerRecord extends CustomerFields, AuditFields {
+  id: string;
+}
+
+export type PaymentStatus = "PENDING" | "PARTIAL" | "PAID";
+
+/**
+ * Compra (§8-§13): cabecera. Se crea siempre junto a sus líneas (comando
+ * compuesto "RegisterPurchase") — mutable SOLO para el estado de pago
+ * (§32, §57): la UI nunca reedita fecha/proveedor/líneas ya confirmadas.
+ */
+export interface PurchaseFields {
+  supplierId: string | null;
+  date: string;
+  referenceNumber: string | null;
+  totalAmount: number;
+  paymentStatus: PaymentStatus;
+  amountPaid: number;
+  notes: string | null;
+}
+
+export interface PurchaseRecord extends PurchaseFields, AuditFields {
+  id: string;
+}
+
+export type PurchaseItemType = "FEED" | "FRY" | "MEDICINE" | "MATERIAL" | "EQUIPMENT" | "OTHER";
+
+/** Línea de compra (§9): append-only, solo existe dentro de su Purchase. */
+export interface PurchaseLineFields {
+  purchaseId: string;
+  itemType: PurchaseItemType;
+  feedId: string | null;
+  description: string;
+  quantity: number;
+  unit: string;
+  unitPrice: number;
+  totalAmount: number;
+}
+
+export interface PurchaseLineRecord extends PurchaseLineFields, EventAuditFields {
+  id: string;
+}
+
+export type ExpenseCategory =
+  | "FRY"
+  | "FUEL"
+  | "ELECTRICITY"
+  | "LABOR"
+  | "TRANSPORT"
+  | "MAINTENANCE"
+  | "CONSTRUCTION"
+  | "TOOLS"
+  | "EQUIPMENT"
+  | "MEDICINE"
+  | "SERVICES"
+  | "OTHER";
+
+/**
+ * Gasto (§17-§19): append-only. Nunca duplica una compra ya registrada vía
+ * Purchase (§1 — ver ECONOMICS.md). Una corrección se audita anulando
+ * (`deletedAt` + `voidReason`), nunca borrado físico de un gasto ya
+ * sincronizado (§58, §72).
+ */
+export interface ExpenseFields {
+  date: string;
+  category: ExpenseCategory;
+  description: string;
+  quantity: number | null;
+  unit: string | null;
+  unitPrice: number | null;
+  totalAmount: number;
+  supplierId: string | null;
+  batchId: string | null;
+  pondId: string | null;
+  notes: string | null;
+  voidReason: string | null;
+}
+
+export interface ExpenseRecord extends ExpenseFields, EventAuditFields {
+  id: string;
+}
+
+export type HarvestType = "PARTIAL" | "TOTAL";
+
+/** Cosecha (§20-§26): evento append-only, salida del ledger de peces. */
+export interface HarvestFields {
+  batchId: string;
+  pondId: string;
+  date: string;
+  quantityFish: number;
+  totalWeightKg: number;
+  averageWeightG: number;
+  harvestType: HarvestType;
+  responsibleName: string | null;
+  notes: string | null;
+}
+
+export interface HarvestRecord extends HarvestFields, EventAuditFields {
+  id: string;
+}
+
+/**
+ * Venta (§27-§32): cabecera. Se crea siempre junto a sus líneas (comando
+ * compuesto "RegisterSale") — mutable SOLO para el estado de pago.
+ */
+export interface SaleFields {
+  customerId: string | null;
+  date: string;
+  paymentStatus: PaymentStatus;
+  amountPaid: number;
+  totalAmount: number;
+  notes: string | null;
+}
+
+export interface SaleRecord extends SaleFields, AuditFields {
+  id: string;
+}
+
+/**
+ * Línea de venta (§28-§31): append-only. `harvestId` opcional — presente
+ * cuando la venta descuenta kg disponibles de una cosecha ya registrada;
+ * ausente para una venta externa/no reconciliada con ninguna cosecha.
+ */
+export interface SaleLineFields {
+  saleId: string;
+  batchId: string;
+  harvestId: string | null;
+  description: string;
+  quantityFish: number | null;
+  weightKg: number;
+  pricePerKg: number;
+  totalAmount: number;
+}
+
+export interface SaleLineRecord extends SaleLineFields, EventAuditFields {
+  id: string;
+}
+
 export type SyncEntityType =
   | "Species"
   | "Pond"
@@ -341,7 +529,17 @@ export type SyncEntityType =
   | "CreateFeedWithInitialStock"
   // Fase 4.
   | "WaterQualityRecord"
-  | "Task";
+  | "Task"
+  // Fase 5 (economía y cierre productivo).
+  | "FarmSettings"
+  | "Supplier"
+  | "Customer"
+  | "Expense"
+  | "Harvest"
+  | "Purchase"
+  | "Sale"
+  | "RegisterPurchase"
+  | "RegisterSale";
 
 export type SyncOperationType = "CREATE" | "UPDATE" | "DELETE";
 

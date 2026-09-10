@@ -9,16 +9,25 @@
 import Dexie, { type EntityTable } from "dexie";
 
 import type {
+  CustomerRecord,
+  ExpenseRecord,
+  FarmSettingsRecord,
   FeedingRecordRecord,
   FeedInventoryMovementRecord,
   FeedRecord,
   FishBatchRecord,
   FishTransferRecord,
+  HarvestRecord,
   MortalityRecordRecord,
   PondRecord,
+  PurchaseLineRecord,
+  PurchaseRecord,
+  SaleLineRecord,
+  SaleRecord,
   SamplingRecord,
   SpeciesRecord,
   StockingRecord,
+  SupplierRecord,
   SyncMetaRecord,
   SyncQueueRecord,
   TaskRecord,
@@ -38,6 +47,15 @@ export class AppDatabase extends Dexie {
   samplings!: EntityTable<SamplingRecord, "id">;
   waterQualityRecords!: EntityTable<WaterQualityRecordRecord, "id">;
   tasks!: EntityTable<TaskRecord, "id">;
+  farmSettings!: EntityTable<FarmSettingsRecord, "id">;
+  suppliers!: EntityTable<SupplierRecord, "id">;
+  customers!: EntityTable<CustomerRecord, "id">;
+  purchases!: EntityTable<PurchaseRecord, "id">;
+  purchaseLines!: EntityTable<PurchaseLineRecord, "id">;
+  expenses!: EntityTable<ExpenseRecord, "id">;
+  harvests!: EntityTable<HarvestRecord, "id">;
+  sales!: EntityTable<SaleRecord, "id">;
+  saleLines!: EntityTable<SaleLineRecord, "id">;
   syncQueue!: EntityTable<SyncQueueRecord, "id">;
   syncMeta!: EntityTable<SyncMetaRecord, "key">;
 
@@ -92,6 +110,22 @@ export class AppDatabase extends Dexie {
     this.version(4).stores({
       waterQualityRecords: "id, pondId, batchId, [pondId+date], date, createdAt",
       tasks: "id, dueDate, status, pondId, batchId, updatedAt",
+    });
+
+    // Fase 5 (economía y cierre productivo): igual criterio que v2/v3/v4 —
+    // solo tablas nuevas, ninguna definición anterior se toca (probado en
+    // __tests__/schemaUpgrade.test.ts con datos de v4 ya presentes al abrir
+    // con este esquema).
+    this.version(5).stores({
+      farmSettings: "id",
+      suppliers: "id, active, updatedAt",
+      customers: "id, active, updatedAt",
+      purchases: "id, supplierId, date, paymentStatus, updatedAt",
+      purchaseLines: "id, purchaseId, feedId, createdAt",
+      expenses: "id, date, category, batchId, pondId, supplierId, createdAt",
+      harvests: "id, batchId, pondId, [batchId+pondId], date, createdAt",
+      sales: "id, customerId, date, paymentStatus, updatedAt",
+      saleLines: "id, saleId, batchId, harvestId, createdAt",
     });
   }
 }

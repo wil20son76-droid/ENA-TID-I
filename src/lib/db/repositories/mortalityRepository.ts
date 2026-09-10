@@ -11,12 +11,13 @@ const ENTITY_TYPE = "MortalityRecord" as const;
  * del ledger, igual que un traslado saliente).
  */
 export async function getAvailableForMortality(batchId: string, pondId: string): Promise<number> {
-  const [stockings, transfers, mortalities] = await Promise.all([
+  const [stockings, transfers, mortalities, harvests] = await Promise.all([
     db.stockings.where("batchId").equals(batchId).toArray(),
     db.fishTransfers.where("batchId").equals(batchId).toArray(),
     db.mortalityRecords.where("batchId").equals(batchId).toArray(),
+    db.harvests.where("batchId").equals(batchId).toArray(),
   ]);
-  return getBatchPondBalance(stockings, transfers, mortalities, batchId, pondId);
+  return getBatchPondBalance(stockings, transfers, mortalities, harvests, batchId, pondId);
 }
 
 export interface CreateMortalityInput {
