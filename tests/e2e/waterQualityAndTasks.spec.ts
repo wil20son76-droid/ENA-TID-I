@@ -48,7 +48,8 @@ test.describe.serial("Calidad del agua y tareas offline (Fase 4)", () => {
 
   test.beforeAll(async () => {
     await queryDb(
-      'TRUNCATE "sync_operations", "tasks", "water_quality_records", "feeding_records", ' +
+      'TRUNCATE "sync_operations", "sale_lines", "sales", "harvests", "expenses", "purchase_lines", ' +
+        '"purchases", "customers", "suppliers", "farm_settings", "tasks", "water_quality_records", "feeding_records", ' +
         '"mortality_records", "samplings", "feed_inventory_movements", "feeds", ' +
         '"fish_transfers", "stockings", "fish_batches", "ponds", "species"',
     );
