@@ -334,3 +334,99 @@ estanque/lote asignado a un usuario (§8), rotación automática de
 limitaciones compromete el requisito crítico de esta fase (offline-first
 sin romper autenticación) — quedan documentadas como trabajo futuro, no
 como huecos ocultos.
+
+## 11. Recuperación de contraseña
+
+Dos caminos independientes para recuperar el acceso, complementarios: por
+email (autoservicio, requiere que el usuario tenga `email` cargado) y por
+ADMIN (siempre disponible, no depende de que exista un email).
+
+### 11.1 Por email
+
+- **`POST /api/auth/forgot-password`** genera un token aleatorio de 256
+  bits (`randomBytes(32)`, `src/lib/auth/passwordResetTokens.ts`) y guarda
+  solo su **hash SHA-256** en `PasswordResetToken.tokenHash` — igual que
+  las contraseñas nunca se guardan en claro, el valor que viaja en el
+  enlace de email tampoco: una filtración de esa tabla no permite
+  reconstruir ningún enlace válido. Expira a los 30 minutos
+  (`RESET_TOKEN_TTL_MS`).
+- **Nunca revela si una cuenta existe**: la respuesta HTTP es
+  exactamente la misma (200, mismo mensaje) exista o no un usuario con
+  ese email, esté activo o no — solo cambia, de forma invisible para
+  quien llama, si se generó un token y se intentó enviar el email.
+- **Rate limit** por email introducido (mismo limitador en memoria que
+  login, §1.2 de sus limitaciones aplican igual: en memoria del proceso,
+  se reinicia con cada despliegue, no es distribuido) — 10 solicitudes
+  por 15 minutos para el mismo email, exista o no la cuenta, así que el
+  límite en sí tampoco filtra existencia.
+- **`POST /api/auth/reset-password`** consume el token: lo invalida
+  (`usedAt`) en la misma transacción que actualiza la contraseña, así que
+  un segundo intento con el mismo token —incluso dentro de su ventana de
+  30 minutos— se rechaza. Revoca todas las sesiones activas
+  (`tokenVersion` incrementado) — la recuperación existe precisamente
+  porque la contraseña anterior se dio por perdida o comprometida.
+  Cualquier motivo de rechazo (token inexistente, ya usado, o expirado)
+  responde el mismo mensaje genérico, sin distinguir cuál fue.
+- **Envío de email desacoplado del proveedor**
+  (`src/lib/server/email.ts`): un webhook HTTP genérico
+  (`EMAIL_WEBHOOK_URL`, `EMAIL_WEBHOOK_API_KEY`, `EMAIL_FROM` —
+  `.env.example`), nunca un SDK de un proveedor concreto. **Sin
+  `EMAIL_WEBHOOK_URL` configurada (el valor por defecto en este
+  repositorio, incluido todo desarrollo local), el email nunca se envía
+  de verdad: el enlace completo queda solo en el log del servidor.** Es
+  intencional para poder probar el flujo de punta a punta sin contratar
+  un proveedor todavía, pero es una limitación operativa real en
+  producción: sin esa variable configurada, nadie recibe su enlace de
+  recuperación y la función queda inutilizable en la práctica, aunque la
+  API responda 200 igual (por diseño, para no revelar nada — ver arriba).
+  Configurarla es un paso obligatorio del checklist de despliegue real,
+  documentado en `DEPLOYMENT.md`.
+
+### 11.2 Por ADMIN
+
+- Desde `/usuarios`, "Restablecer contraseña": ADMIN escribe una
+  contraseña temporal para otra cuenta (`PATCH /api/users/:id`, mismo
+  endpoint que ya existía para editar usuarios). Fijar `password` por
+  esta vía **siempre** marca `mustChangePassword=true` en el mismo
+  `update` — a diferencia de `POST /api/auth/reset-password` (la propia
+  persona eligiendo su contraseña, no hace falta forzar nada más), aquí
+  es ADMIN quien la elige por ella, así que se trata siempre como
+  temporal. También revoca las sesiones activas de esa cuenta
+  (`tokenVersion` incrementado, mismo mecanismo que "Cerrar sesiones").
+- **ADMIN nunca puede leer la contraseña actual de nadie** — no hay
+  ningún endpoint ni columna que la exponga (solo `passwordHash`,
+  irreversible por diseño de `scrypt`, §2). Restablecer es la única
+  operación posible: reemplazar, nunca recuperar.
+- **`mustChangePassword`**: `AuthGate` lee este campo en la respuesta del
+  login y, si es `true`, bloquea el resto de la app con
+  `ForceChangePasswordScreen` — la sesión existe (el login con la
+  temporal ya ocurrió, con red) pero no da acceso a ninguna pantalla
+  productiva hasta que la persona fije su propia contraseña
+  (`PATCH /api/auth/change-password`, que exige la contraseña actual —
+  la temporal— como confirmación, y emite un token nuevo para no cerrar
+  la sesión del propio dispositivo que acaba de cambiarla).
+
+### 11.3 Limitación offline (documentada a propósito, según el encargo)
+
+**Toda la recuperación de contraseña exige conexión real** — no hay
+excepción, y es coherente con el resto del modelo de esta fase (§1: el
+login mismo es la única otra operación que también la exige):
+
+- `forgot-password`/`reset-password` son, por definición, el único punto
+  de entrada de alguien que **todavía no tiene sesión** — no hay ningún
+  dato local (IndexedDB) contra el que resolver esto sin red.
+- El cambio obligatorio tras un reset por ADMIN
+  (`ForceChangePasswordScreen`) es la continuación directa de un login
+  que ya exigió red — si el dispositivo pierde conexión justo en ese
+  paso intermedio, el envío falla con un error visible y se puede
+  reintentar en cuanto vuelva; nunca se pierde ni corrompe ningún dato
+  productivo porque esta pantalla no toca Dexie/outbox en absoluto.
+- **Una sesión YA autorizada (`mustChangePassword` en `false` o ausente)
+  sigue funcionando sin Internet exactamente igual que siempre** — nada
+  de esta fase cambia esa garantía (§1). Una revocación o un cambio de
+  contraseña hecho en otro dispositivo (por ADMIN, o por la propia
+  persona vía email) solo tiene efecto en un dispositivo ya autorizado y
+  offline **cuando ese dispositivo vuelve a conectarse** y el servidor
+  valida su `tokenVersion` en su próximo intento de sincronización —
+  mismo mecanismo de revocación no instantánea ya documentado en §1.2
+  (punto 1) y §1.3, sin ningún caso nuevo introducido aquí.

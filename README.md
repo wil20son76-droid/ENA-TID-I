@@ -140,10 +140,25 @@ Ver [`.env.example`](./.env.example). Como mínimo:
 - `ADMIN_USERNAME`/`ADMIN_NAME`/`ADMIN_PASSWORD`: solo para
   `npm run auth:create-admin` (bootstrap manual del primer admin), nunca
   se dejan puestas en el entorno de forma permanente.
+- `APP_PUBLIC_URL`/`EMAIL_WEBHOOK_URL`/`EMAIL_WEBHOOK_API_KEY`/`EMAIL_FROM`:
+  recuperación de contraseña por email — ver
+  [`SECURITY.md` §"Recuperación de contraseña"](./SECURITY.md).
 
 Nunca subas un `.env` con credenciales reales; `.env.example` es la única
 plantilla versionada. Nunca hay secretos en el frontend — ver
 [`SECURITY.md`](./SECURITY.md) §4.
+
+## Marca (logo)
+
+`src/components/brand/Logo.tsx` es el único punto de uso del logo en el
+cliente; `src/lib/server/brandAssets.ts` es su equivalente del lado
+servidor. Ambos leen el mismo archivo maestro: **`public/brand/logo.png`**
+(PNG, fondo transparente). Para activar el logo definitivo, basta con
+colocar ese archivo ahí y desplegar — favicon, íconos PWA (192×192,
+512×512, variante maskable con zona de seguridad), login, encabezado e
+informes imprimibles lo leen automáticamente, sin tocar código. Sin el
+archivo (estado por defecto de este repositorio), todo cae al placeholder
+"P" ya existente — cero comportamiento roto mientras tanto.
 
 ## Base de datos local (IndexedDB) y sincronización
 
@@ -195,7 +210,11 @@ npm run test
 # cerrar/reabrir la PWA offline, registrar las ocho operaciones de campo
 # —alimentación, mortalidad, muestreo, calidad del agua, tarea, gasto,
 # cosecha, venta—, consultar informes offline, cerrar/reabrir de nuevo,
-# reconectar y sincronizar dos veces sin pérdida ni duplicados).
+# reconectar y sincronizar dos veces sin pérdida ni duplicados) + logo de
+# marca y recuperación de contraseña (login con el logo cableado, manifest
+# e íconos PWA responden 200, y un ADMIN restableciendo la contraseña de
+# un Trabajador de punta a punta: pantalla de cambio obligatorio, login
+# bloqueado hasta cambiarla, contraseña nueva persistida de verdad).
 npm run test:e2e
 ```
 
@@ -250,16 +269,24 @@ src/
                        (producción, mortalidad, alimentación,
                        inventario, calidad del agua, cosechas, ventas,
                        economía) y comparación por lote/especie
-    usuarios/          Alta/listado/desactivación de usuarios y revocación
-                       de sesiones (Fase 7, solo Administrador)
-    api/auth/          login, refresh (Fase 7)
-    api/users/         CRUD admin-only de usuarios — nunca por el
-                       protocolo de sincronización (Fase 7)
+    usuarios/          Alta/listado/desactivación de usuarios, revocación
+                       de sesiones y "Restablecer contraseña" (solo Admin)
+    icon.tsx           Favicon (convención de Next.js) — lee el logo maestro
+    apple-icon.tsx     Apple touch icon — ídem, sin transparencia
+    icons/[size]/      Íconos PWA 192/512/512-maskable (manifest.ts)
+    api/auth/          login, refresh, forgot-password, reset-password,
+                       change-password (Fase 7 + recuperación de contraseña)
+    api/users/         CRUD admin-only de usuarios (incl. reset de
+                       contraseña) — nunca por el protocolo de
+                       sincronización (Fase 7)
     api/health/        Healthcheck público para Railway (Fase 7)
   components/         Componentes de UI (layout, sync, pwa, estanques)
-    auth/              AuthGate, LoginScreen, RequireCapability (Fase 7)
+    auth/              AuthGate, LoginScreen (incl. recuperación),
+                       ForceChangePasswordScreen, RequireCapability
+    brand/             Logo.tsx — único punto de uso del logo en cliente
     charts/           Gráficos SVG propios (línea, barras) — sin librería
-    analytics/         Barra de filtros, botones de exportar CSV/imprimir, KpiCard
+    analytics/         Barra de filtros, exportar CSV/imprimir (con logo
+                       en el encabezado de impresión), KpiCard
   hooks/              Hooks de React (estado de sincronización)
   lib/
     auth/             Autenticación/permisos (Fase 7): password, JWT,
@@ -278,7 +305,9 @@ src/
                        filtros, informes por dominio, comparación por
                        lote/especie, exportación CSV — funciones puras,
                        nunca dentro de un componente de React
-    server/           Cliente Prisma (servidor), logger estructurado
+    server/           Cliente Prisma (servidor), logger estructurado,
+                       email.ts (envío desacoplado del proveedor),
+                       brandAssets.ts (lee el logo maestro para íconos)
     sync/             Motor de sincronización cliente + protocolo
     validation/       Esquemas Zod compartidos cliente/servidor
     labels.ts         Textos en español de enums de dominio

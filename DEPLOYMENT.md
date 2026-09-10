@@ -83,6 +83,8 @@ Configurar en el panel del servicio (Settings → Variables):
 | `NODE_ENV` | `"production"` | Railway lo fija automáticamente en despliegues; verificar que quede así — condiciona las cabeceras de seguridad de `next.config.ts` (ver `SECURITY.md` §6) |
 | `AUTH_SECRET` | **Manual, obligatoria** | Generar con `openssl rand -base64 48`; nunca commitear. Ver `SECURITY.md` §4 |
 | `SEED_DEMO_DATA` | `"false"` (o no definida) | Nunca `"true"` en producción — evita sembrar datos de demostración por accidente |
+| `APP_PUBLIC_URL` | **Manual, obligatoria para recuperación por email** | URL pública real del servicio (ej. `https://tu-app.up.railway.app`) — sin esto, el enlace del email de recuperación queda mal formado |
+| `EMAIL_WEBHOOK_URL` / `EMAIL_WEBHOOK_API_KEY` / `EMAIL_FROM` | **Manual, obligatorias para recuperación por email** | Ver `SECURITY.md` §11.1 — sin `EMAIL_WEBHOOK_URL`, el enlace de recuperación solo se registra en el log, nadie lo recibe de verdad. El reset por ADMIN desde `/usuarios` sigue funcionando igual sin esto configurado |
 
 `ADMIN_USERNAME`/`ADMIN_NAME`/`ADMIN_PASSWORD` **no** se dejan como
 variables permanentes del servicio — son solo para el bootstrap puntual
@@ -152,14 +154,23 @@ no hace falta fijar una versión exacta adicional.
 ## 8. Después del primer despliegue
 
 1. Verificar `GET https://<tu-dominio-railway>/api/health` → `{"status":"ok"}`.
-2. Crear el primer admin (§6).
-3. Iniciar sesión en la PWA con esa cuenta, crear al menos un usuario
+2. Confirmar que `public/brand/logo.png` está en el repositorio desplegado
+   (README.md, §"Marca") — si no, favicon/íconos PWA/login siguen
+   mostrando el placeholder "P" en vez del logo definitivo, sin romper
+   nada, pero sin la marca real.
+3. Crear el primer admin (§6).
+4. Iniciar sesión en la PWA con esa cuenta, crear al menos un usuario
    `MANAGER`/`WORKER` real (§6, desde `/usuarios`).
-4. Confirmar que `NODE_ENV=production` está activo (las cabeceras de
+5. Confirmar que `NODE_ENV=production` está activo (las cabeceras de
    seguridad de `SECURITY.md` §6 solo se aplican en ese entorno).
-5. Programar el primer backup manual y confirmar la estrategia
+6. Configurar `APP_PUBLIC_URL` y `EMAIL_WEBHOOK_URL` (§4) y probar
+   "¿Olvidaste tu contraseña?" una vez de verdad — sin esto, la
+   recuperación por email responde 200 igual (por diseño, nunca revela
+   nada) pero nadie recibe el enlace; el reset por ADMIN desde
+   `/usuarios` es la alternativa mientras tanto.
+7. Programar el primer backup manual y confirmar la estrategia
    recurrente — ver `BACKUP_RESTORE.md`.
-6. Ejecutar la prueba offline obligatoria (ver `OFFLINE_SYNC.md` y
+8. Ejecutar la prueba offline obligatoria (ver `OFFLINE_SYNC.md` y
    `tests/e2e/productionReadiness.spec.ts` como referencia del guion) al
    menos una vez contra el despliegue real, desde un dispositivo/navegador
    real — los tests E2E automatizados ya cubren este escenario contra un
