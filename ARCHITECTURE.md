@@ -1,14 +1,17 @@
 # ARCHITECTURE.md
 
 Este documento describe **cómo está construido lo que ya existe** (Fases
-1, 2, 3, 3.5 y 4). Para la arquitectura objetivo completa del proyecto
+1, 2, 3, 3.5, 4 y 5). Para la arquitectura objetivo completa del proyecto
 (todas las fases, modelo de datos completo, riesgos) ver [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md).
 Para el detalle específico de offline/sincronización, con diagramas, ver
 [`OFFLINE_SYNC.md`](./OFFLINE_SYNC.md) — su §8 documenta el modelo de
 lotes/siembras/traslados (Fase 2), su §9 el de alimento/mortalidad/
 muestreos (Fase 3), su §10 el hardening de consistencia de la Fase 3.5
 (comandos de negocio compuestos, orden de sync determinista, recuperación
-de fallos parciales), y su §11 calidad del agua, alertas y tareas (Fase 4).
+de fallos parciales), su §11 calidad del agua, alertas y tareas (Fase 4),
+y su §12 economía y cierre productivo (Fase 5). Para la política
+contable (qué es una compra vs un gasto, costo de inventario de
+alimento, economía de lote), ver [`ECONOMICS.md`](./ECONOMICS.md).
 
 ## 1. Visión general
 
@@ -48,7 +51,7 @@ sincronización, y su ausencia nunca bloquea ni degrada la experiencia
 
 ## 2. Capas y responsabilidades
 
-### `src/lib/domain/` — dominio puro (Fases 2, 3 y 4)
+### `src/lib/domain/` — dominio puro (Fases 2, 3, 4 y 5)
 
 Funciones puras, sin dependencias de Dexie ni de Prisma, importadas por
 igual desde el cliente (repositorios) y el servidor
@@ -96,6 +99,24 @@ una, nunca dos implementaciones que puedan divergir:
   completadas/canceladas), `comparePriority`, `needsSamplingReminder`
   (solo una sugerencia visual, nunca crea una `Task`). Ver
   `OFFLINE_SYNC.md` §11.3-§11.4.
+- `money.ts` (Fase 5): `formatMoney`/`roundMoney` — único punto de
+  formato/redondeo de dinero de toda la app, moneda configurable
+  (nunca "Bs" hardcodeado). Ver `ECONOMICS.md` §2-§3.
+- `feedCost.ts` (Fase 5): `calculateFeedMovementCosts`/
+  `calculateFeedInventoryValuation` — costo de alimento por promedio
+  ponderado histórico, derivado del mismo `FeedInventoryMovement` de
+  `feedLedger.ts`, nunca del precio actual del catálogo. Ver
+  `ECONOMICS.md` §4.
+- `batchEconomics.ts` (Fase 5): `getBatchEconomics` — función central
+  única de costo directo/costo por kg/ingresos/ganancia/margen de un
+  lote; nunca reparte gastos generales no asignados. Ver
+  `ECONOMICS.md` §5-§9.
+- `batchLedger.ts` (Fase 5, extendido): `getBatchPondBalance`/
+  `getBatchDistribution`/`getPondOccupancy`/`getBatchTotalBalance`
+  ahora reciben también `harvests` como cuarta salida del ledger
+  (`siembra ± traslado - mortalidad - cosecha`); nuevas
+  `getBatchHarvestedFishTotal`/`getBatchHarvestedWeightKgTotal`. Ver
+  `OFFLINE_SYNC.md` §12.2.
 
 ### `src/lib/db/` — datos locales
 
@@ -103,6 +124,8 @@ una, nunca dos implementaciones que puedan divergir:
   `species`, `ponds`, `fishBatches`, `stockings`, `fishTransfers`,
   `feeds`, `feedInventoryMovements`, `feedingRecords`,
   `mortalityRecords`, `samplings`, `waterQualityRecords`, `tasks`,
+  `farmSettings`, `suppliers`, `customers`, `purchases`,
+  `purchaseLines`, `expenses`, `harvests`, `sales`, `saleLines`,
   `syncQueue`, `syncMeta`, versionadas explícitamente
   (`this.version(1).stores(...)` … `this.version(4).stores(...)`).
   Cualquier cambio de esquema agrega una nueva versión, nunca modifica
@@ -177,6 +200,35 @@ una, nunca dos implementaciones que puedan divergir:
 - `repositories/syncQueueRepository.ts`: lectura/escritura de la cola de
   sincronización y de `syncMeta` (cursor `lastSyncedAt`), usado solo por
   el motor de sync, nunca por la UI directamente.
+- `repositories/settingsRepository.ts` (Fase 5): `getFarmSettings`
+  crea el singleton `FarmSettings` con valores por defecto la primera
+  vez que se pide (encolando su propio `CREATE`), `updateFarmSettings`
+  lo edita — mismo mecanismo LWW que `taskRepository.ts`.
+- `repositories/supplierRepository.ts` / `customerRepository.ts`
+  (Fase 5): CRUD simple sobre `createRecord`/`updateRecord`, igual
+  criterio que `speciesRepository.ts`.
+- `repositories/purchaseRepository.ts` (Fase 5, comando compuesto):
+  `registerPurchase` crea `Purchase` + `PurchaseLine[]` (+ un
+  `FeedInventoryMovement` `PURCHASE` por cada línea de alimento) en una
+  transacción Dexie local; el outbox encola un único comando de
+  negocio `RegisterPurchase`. `updatePurchasePaymentStatus` es la única
+  otra mutación permitida. Ver `OFFLINE_SYNC.md` §12.1.
+- `repositories/harvestRepository.ts` (Fase 5): `createHarvest` valida
+  el balance del lote+estanque (mismo criterio que
+  `fishTransferRepository.ts`/`mortalityRepository.ts`) y calcula
+  `averageWeightG` automáticamente.
+- `repositories/saleRepository.ts` (Fase 5, comando compuesto):
+  `registerSale` crea `Sale` + `SaleLine[]`, validando contra
+  `getAvailableKgForHarvest` cuando una línea referencia una cosecha;
+  el outbox encola un único comando de negocio `RegisterSale`.
+  `updateSalePaymentStatus` es la única otra mutación permitida.
+- `repositories/expenseRepository.ts` (Fase 5): `createExpense` evento
+  append-only; `voidExpense` anula con `deletedAt` + `voidReason`
+  obligatorio, nunca borra físicamente un gasto ya sincronizado.
+- `repositories/batchEconomicsRepository.ts` (Fase 5): envoltorio de
+  solo lectura que trae de Dexie todo lo que necesita
+  `getBatchEconomics` (dominio) y resuelve el vínculo
+  `FeedingRecord` → `FeedInventoryMovement` por `sourceType`/`sourceId`.
 
 ### `src/lib/sync/` — sincronización cliente
 
@@ -402,9 +454,49 @@ editan, así que no hay nada que resolver por ese mecanismo — su único
 conflicto posible sería el de balance (§8.3, §9.4), y
 `WaterQualityRecord` ni siquiera ese: no valida ningún balance.
 
-El modelo de datos completo del dominio piscícola restante (cosechas,
-ventas, rentabilidad...) está documentado en `IMPLEMENTATION_PLAN.md`
-§4 y se implementa de forma incremental en las siguientes fases.
+- **`FarmSettings`** (Fase 5) — singleton (`id = "default"`) mutable
+  LWW: `currencyCode`/`currencySymbol`, para no hardcodear "Bs" en
+  ninguna función (ver `ECONOMICS.md` §2).
+- **`Supplier`**/**`Customer`** (Fase 5) — catálogos mutables LWW,
+  mismo criterio que Species/Pond/Feed.
+- **`Purchase`** + **`PurchaseLine`** (Fase 5) — cabecera + líneas de
+  una compra. `Purchase` es mutable LWW pero la UI solo la reedita para
+  su estado de pago; `PurchaseLine` es append-only. Se crean siempre
+  juntas (y, si hay línea de alimento, junto con su
+  `FeedInventoryMovement` PURCHASE) mediante el comando compuesto
+  `RegisterPurchase` — ver `OFFLINE_SYNC.md` §12.1.
+- **`Expense`** (Fase 5) — gasto append-only, con anulación auditada
+  (`deletedAt` + `voidReason`), nunca duplica una compra ya registrada
+  vía `Purchase` (ver `ECONOMICS.md` §1).
+- **`Harvest`** (Fase 5) — cosecha append-only, integrada en el ledger
+  de peces como una salida más (`getBatchPondBalance`), mismo criterio
+  de lock por `batchId` que `FishTransfer`/`MortalityRecord` — ver
+  `OFFLINE_SYNC.md` §12.2.
+- **`Sale`** + **`SaleLine`** (Fase 5) — cabecera + líneas de una
+  venta, mismo criterio de atomicidad/mutabilidad que
+  `Purchase`/`PurchaseLine`. `SaleLine.harvestId` opcional vincula la
+  venta a una cosecha concreta, validado contra el kg disponible de
+  esa cosecha mediante advisory lock — ver `OFFLINE_SYNC.md` §12.1.
+- **`SyncOperation`** — registro de operaciones de sync procesadas por el
+  servidor; `operationId` es la clave de idempotencia.
+
+`Species`, `Pond`, `FishBatch`, `Feed`, `Task`, `FarmSettings`,
+`Supplier`, `Customer`, `Purchase` y `Sale` comparten los mismos
+campos de auditoría (`createdAt`, `updatedAt`, `deletedAt`, `version`,
+`deviceId`, `createdBy`, `updatedBy`) tanto en Prisma como en Dexie, con
+los mismos nombres — el mapeo entre ambos lados es directo, y `version`
+es la base de la resolución de conflictos last-write-wins (§6 de
+`OFFLINE_SYNC.md`). `Stocking`, `FishTransfer`, `FeedInventoryMovement`,
+`FeedingRecord`, `MortalityRecord`, `Sampling`, `WaterQualityRecord`,
+`PurchaseLine`, `Expense`, `Harvest` y `SaleLine`, al ser append-only,
+no tienen `version` ni `updatedAt`: nunca se editan, así que no hay
+nada que resolver por ese mecanismo — su único conflicto posible sería
+el de balance (§8.3, §9.4, §12.2), y `WaterQualityRecord`/`Expense`/
+`PurchaseLine` ni siquiera ese: no validan ningún balance.
+
+El modelo de datos completo del dominio piscícola queda cubierto con
+la Fase 5 — ver `IMPLEMENTATION_PLAN.md` §4 y `ECONOMICS.md` para la
+política contable.
 
 ## 4. Decisiones de arquitectura tomadas durante la Fase 1
 
@@ -596,14 +688,54 @@ para el detalle completo de cada punto.
    `validation/sync.ts` — nunca se confía solo en que el cliente ya
    validó (§42 del encargo).
 
+## 4.5 Decisiones de arquitectura tomadas durante la Fase 5
+
+1. **Compra vs Gasto es una decisión de modelado explícita, no
+   implícita**: se documentó primero como política contable
+   (`ECONOMICS.md` §1) y solo después se tradujo a dos tablas
+   separadas — evita que un futuro reporte sume ambas cuando en
+   realidad representan el mismo concepto económico.
+2. **El costo de alimento se deriva del ledger, nunca se guarda como
+   snapshot por movimiento**: se consideró añadir `unitCostPerKg` real
+   a los `FeedInventoryMovement` de tipo `CONSUMPTION` (hoy siempre
+   `null`, heredado de la Fase 3.5), pero eso habría requerido tocar el
+   protocolo de sync de `RegisterFeeding` ya en producción — se optó
+   por una función de dominio pura (`feedCost.ts`) que recalcula el
+   costo desde el historial ya existente, sin cambiar ni un campo de
+   una fase anterior. Documentado como decisión (no como limitación) en
+   `ECONOMICS.md` §4.
+3. **`Harvest` reutiliza el lock por `batchId` de `FishTransfer`/
+   `MortalityRecord` en vez de uno propio**: las tres compiten por el
+   mismo balance de peces en un estanque, así que comparten el mismo
+   mecanismo de `pg_advisory_xact_lock` — no se creó un lock nuevo.
+4. **La supervivencia nunca se recalcula con el total reducido por
+   cosecha**: encontrado al escribir `productionSummary.ts` — una
+   cosecha es una decisión de negocio, no una pérdida, así que
+   `getSurvivalPercent` sigue usando `stockedTotal - mortalityTotal`
+   explícitamente (ver `OFFLINE_SYNC.md` §12.2).
+5. **`Purchase`/`Sale` reutilizan LWW en vez de un mecanismo nuevo de
+   "inmutable tras confirmar"**: en vez de inventar un tercer patrón de
+   auditoría, se restringió por convención de UI (nunca se expone un
+   formulario de edición completa) sobre el mismo mecanismo de versión
+   que ya existía — la única mutación real que se ejerce es el estado
+   de pago.
+6. **Dos niveles de prioridad de sync nuevos, no uno**: `RegisterSale`
+   necesitaba depender de que un `Harvest` referenciado ya estuviera
+   aplicado (para validar su balance de kg correctamente), lo que no
+   encajaba en los 4 niveles existentes — se añadió el nivel 5 en vez
+   de forzarlo dentro del nivel 4 (ver `OFFLINE_SYNC.md` §12.3).
+
 ## 5. Qué NO está implementado todavía
 
-Deliberadamente fuera de alcance de la Fase 4 (ver `IMPLEMENTATION_PLAN.md`
-§9 para el orden de las fases siguientes): tratamientos/medicamentos,
-diagnóstico de enfermedades, sensores IoT, compras completas y
-proveedores avanzados, gastos generales, ventas, cosechas, rentabilidad
-completa, IA, reportes PDF avanzados, autenticación, roles de usuario,
-gráficos avanzados, notificaciones push, eventos automáticos de
-producción creados desde el calendario, y el aviso interactivo "nueva
-versión disponible" del service worker (por ahora se actualiza solo,
-sin avisar).
+Con la Fase 5 se cubre el resto del dominio productivo y económico
+básico. Deliberadamente fuera de alcance (§76 del encargo de Fase 5,
+ver `IMPLEMENTATION_PLAN.md` §9): contabilidad fiscal, facturación
+electrónica, impuestos, integración bancaria, nómina, tratamientos/
+medicamentos, diagnóstico de enfermedades, reproducción, sensores IoT,
+IA, múltiples fincas, un ERP completo, reportes PDF avanzados,
+autenticación, roles de usuario, gráficos avanzados, notificaciones
+push, eventos automáticos de producción creados desde el calendario, y
+el aviso interactivo "nueva versión disponible" del service worker
+(por ahora se actualiza solo, sin avisar). Ver también `ECONOMICS.md`
+§12 para las limitaciones específicas de la política contable
+(correcciones/anulaciones, `fryCost` vs compra explícita de alevines).

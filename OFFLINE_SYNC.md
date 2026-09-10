@@ -901,3 +901,96 @@ visitó estando online. Las rutas nuevas de esta fase (`/calidad-agua`,
 funcionan offline sin ningún cambio al service worker — verificado en
 el E2E, que las visita una vez online (§43 del encargo) y las vuelve a
 usar con la red cortada.
+
+## 12. Economía y cierre productivo (Fase 5)
+
+La política contable completa (qué es Purchase vs Expense, cómo se
+evita el doble conteo, el algoritmo de costo de inventario de
+alimento, cómo se calcula la economía de un lote) está documentada
+aparte en [`ECONOMICS.md`](./ECONOMICS.md) — esta sección cubre solo
+la mecánica de sincronización/offline nueva de esta fase.
+
+### 12.1 Dos comandos de negocio compuestos más
+
+Mismo patrón que §10.1 (Fase 3.5): el cliente nunca envía una cabecera
+y sus líneas como operaciones independientes.
+
+| Comando de negocio | Encola en vez de | Escribe (servidor) |
+|---|---|---|
+| `RegisterPurchase` | `Purchase` + `PurchaseLine[]` (+ `FeedInventoryMovement[]`) | `Purchase` + `PurchaseLine` + un `FeedInventoryMovement` PURCHASE por cada línea de alimento |
+| `RegisterSale` | `Sale` + `SaleLine[]` | `Sale` + `SaleLine` |
+
+`RegisterPurchase` valida (fuera de cualquier lock, porque una compra
+siempre es una entrada de inventario que nunca puede dejar nada
+negativo) que el proveedor opcional y cada alimento referenciado ya
+existan en el servidor — si no, lanza un error real (`"error"`,
+reintentable) igual que `applyRegisterFeedingOperation`. `RegisterSale`
+valida lote(s)/cliente opcional de la misma forma, y además —cuando
+alguna línea trae `harvestId`— bloquea esa(s) cosecha(s) por advisory
+lock (`pg_advisory_xact_lock(hashtext(harvestId))`, ordenado
+determinísticamente para nunca causar deadlock entre dos ventas que
+referencien las mismas dos cosechas) y verifica que
+`kg ya vendidos + kg de esta venta ≤ kg cosechados` antes de escribir
+nada — igual criterio que el lock por `batchId` de traslados/mortalidad
+o por `feedId` de movimientos de alimento.
+
+`Purchase`/`Sale` en sí son mutables (LWW por versión, igual que
+Species/Pond/Feed/Task) pero la UI **nunca** los reedita tras
+confirmarlos — la única operación simple que encola sobre uno ya
+creado es un `UPDATE` para su estado de pago (§59 del encargo: "mostrar
+pagado/pendiente", nunca un módulo de cuentas por cobrar completo).
+
+### 12.2 Cosecha: una salida más del ledger de peces
+
+`Harvest` es un evento append-only con el MISMO criterio de balance que
+`FishTransfer`/`MortalityRecord` (§8.2-§8.3): comparte su lock por
+`batchId` porque las tres compiten por el mismo balance
+lote+estanque, y su validación server-side (`applyHarvestOperation`)
+usa la misma `getCurrentPondBalance` ya extendida con el nuevo
+parámetro `harvests` en `getBatchPondBalance`
+(`src/lib/domain/batchLedger.ts`). El ledger de peces pasa de
+`siembra ± traslado - mortalidad` a
+`siembra ± traslado - mortalidad - cosecha`, nunca un campo mutable.
+
+Un detalle importante que NO es solo mecánica de sync: la supervivencia
+(`getSurvivalPercent`) se sigue calculando con `stockedTotal -
+mortalityTotal`, nunca con el total ya reducido por cosecha — cosechar
+peces es una decisión de negocio, no una pérdida, y tratarla como tal
+haría bajar artificialmente el % de supervivencia cada vez que se
+cosecha. Ver el comentario en `batchLedger.ts` y las pruebas de
+`productionSummary.test.ts`.
+
+### 12.3 Orden de sincronización: dos niveles nuevos
+
+Extiende la tabla de `src/lib/sync/priority.ts` (§10.5):
+
+| Nivel | Entidades nuevas | Por qué |
+|---|---|---|
+| 1 | `Supplier`, `Customer`, `FarmSettings` | Catálogos sin dependencias locales, igual que Species/Pond/Feed. |
+| 2 | `RegisterPurchase`, `Purchase` | Dependen solo de un catálogo de nivel 1 (proveedor/alimento opcional). |
+| 3 | `Expense` | No valida ningún balance; solo necesita que Supplier/FishBatch/Pond (si están asignados) ya existan. |
+| 4 | `Harvest` | Compite por el mismo balance de peces que FishTransfer/MortalityRecord. |
+| 5 | `RegisterSale`, `Sale` | Si una línea referencia una cosecha, necesita que ESE `Harvest` ya se haya aplicado (nivel 4) para validar su balance de kg correctamente. |
+
+### 12.4 Costo de alimento: derivado del historial, nunca recalculado retroactivamente
+
+A diferencia de los demás mecanismos de esta sección, el costeo de
+alimento (`src/lib/domain/feedCost.ts`) no es un cambio de protocolo de
+sync — es una función pura que recorre el mismo
+`FeedInventoryMovement` que ya sincroniza el ledger de inventario
+(§9.1) y calcula, para cada salida, el costo al promedio ponderado del
+momento. No se guarda un costo por movimiento porque no hace falta:
+recalcularlo desde el historial siempre da el mismo resultado
+(determinista) y nunca cambia cuando el precio *actual* del catálogo
+de alimentos cambia — ver `ECONOMICS.md` para el detalle completo y el
+ejemplo numérico obligatorio del encargo (§16).
+
+### 12.5 Escenario offline verificado
+
+`tests/e2e/economics.spec.ts` reproduce el escenario de cierre de la
+Fase 5 (§68 del encargo) contra Postgres real: compra de 500 kg de
+alimento, cosecha parcial de 200 peces/300 kg, cliente nuevo, venta de
+200 kg a 32 Bs/kg contra esa cosecha y un gasto directo de 1000 Bs —
+todo encolado sin conexión, verificado que sigue visible tras
+cerrar/reabrir la app sin red, y confirmado en PostgreSQL sin
+duplicados tras sincronizar dos veces.

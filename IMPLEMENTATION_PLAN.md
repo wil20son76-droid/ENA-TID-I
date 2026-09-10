@@ -511,7 +511,7 @@ IMPLEMENTATION_PLAN.md
 | **3 — Operación diaria** ✅ | FeedingRecord (+InventoryMovement vinculado), Feed/inventario, MortalityRecord, Sampling, cálculo de biomasa | Registro rápido de alimentación en ≤3 toques; stock e indicadores consistentes |
 | **3.5 — Hardening de consistencia** ✅ | Sin funcionalidad de negocio nueva: comandos de negocio compuestos atómicos (`RegisterFeeding`, `CreateFeedWithInitialStock`), orden de sync determinista por dependencias explícitas, corrección de recuperación tras fallos parciales, mensajes de conflicto específicos | "Registrar alimentación 18 kg" termina en el servidor en exactamente uno de dos estados — `FeedingRecord`+`FeedInventoryMovement` existen, o ninguno existe — nunca uno sin el otro, ante caída, reintento, respuesta perdida o concurrencia; probado contra PostgreSQL real |
 | **4 — Agua y planificación** ✅ | WaterQualityRecord + alertas por especie, Task, Calendario | Alertas visibles sin diagnosticar enfermedades; tareas offline |
-| **5 — Economía** | Supplier, Purchase, Expense, Customer, Harvest, Sale, rentabilidad por lote | Flujo cosecha→venta→rentabilidad correcto y trazable |
+| **5 — Economía** ✅ | Supplier, Purchase, Expense, Customer, Harvest, Sale, rentabilidad por lote | Flujo cosecha→venta→rentabilidad correcto y trazable |
 | **6 — Analítica** | Dashboard avanzado, gráficos, FCR, informes filtrables | FCR documentado (fuente exacta de datos), "datos insuficientes" cuando corresponda |
 | **7 — Hardening** | Prueba offline obligatoria (§65/§80) end-to-end, resolución de conflictos, rendimiento, seguridad, deploy Railway documentado | Escenario completo de §80 pasa sin pérdida ni duplicación |
 
@@ -573,6 +573,27 @@ el E2E de la fase, un bug real en cómo se determinaba "la última
 medición" cuando dos registros comparten fecha sin hora informada.
 Detalle completo en `OFFLINE_SYNC.md` §11; decisiones de arquitectura
 específicas de la fase en `ARCHITECTURE.md` §4.4.
+
+**Fase 5 — completada.** Resto del dominio productivo y económico:
+proveedores/clientes (catálogos simples), compras (con costo de
+inventario de alimento por promedio ponderado histórico — nunca
+recalculado retroactivamente por un cambio de precio actual), gastos
+(nunca duplican una compra ya registrada — política contable fijada en
+`ECONOMICS.md`), cosechas (una salida más del ledger de peces, mismo
+criterio de lock que traslados/mortalidad — la supervivencia nunca se
+recalcula sobre el total reducido por cosecha), ventas (con balance de
+kg disponibles por cosecha, bloqueado por advisory lock) y la economía
+de cada lote (`getBatchEconomics`: costo directo, costo/kg, ingresos,
+ganancia, margen — "provisional" mientras el lote siga con peces
+vivos). Dos comandos de negocio compuestos nuevos (`RegisterPurchase`,
+`RegisterSale`) con el mismo criterio de atomicidad de la Fase 3.5, y
+dos niveles de prioridad de sync nuevos. Probado contra PostgreSQL
+real (idempotencia, rollback forzado con colisión de PK real,
+concurrencia con `Promise.all` en cosecha y venta) y con un escenario
+E2E offline completo (compra→cosecha→cliente→venta→gasto, cerrar/
+reabrir sin conexión, reconectar sin duplicados). Detalle completo en
+`OFFLINE_SYNC.md` §12 y `ECONOMICS.md`; decisiones de arquitectura
+específicas de la fase en `ARCHITECTURE.md` §4.5.
 
 ---
 

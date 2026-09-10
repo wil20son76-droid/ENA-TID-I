@@ -7,23 +7,29 @@ completa y [`ARCHITECTURE.md`](./ARCHITECTURE.md) /
 [`OFFLINE_SYNC.md`](./OFFLINE_SYNC.md) para el detalle técnico del modo
 offline y la sincronización.
 
-Estado actual: **Fase 4 — calidad del agua, alertas y planificación**.
-Sobre la base técnica offline/sync (Fase 1), el núcleo productivo
-(Fase 2: Especies, Estanques, Lotes, Siembras, Traslados), la operación
-diaria (Fase 3: alimento, alimentación, mortalidad, muestreos) y el
-hardening de consistencia de sincronización (Fase 3.5), se añadió:
-registro de calidad del agua (histórico append-only, nunca un
-`pond.currentPh` mutable) con alertas operativas evaluadas contra el
-rango de cada especie presente en el estanque, tareas manuales
-(mutables, con resolución de conflictos por versión) y un calendario
-simple (agenda + vista mensual) — todo offline-first, con las alertas
-calculadas 100% en el dispositivo, sin ninguna llamada de red. El resto
-del dominio (cosechas, ventas, rentabilidad...) se documenta en el plan
-y se construye en fases posteriores — ver
-[`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) y las secciones
+Estado actual: **Fase 5 — economía y cierre productivo**. Sobre la
+base técnica offline/sync (Fase 1), el núcleo productivo (Fase 2:
+Especies, Estanques, Lotes, Siembras, Traslados), la operación diaria
+(Fase 3: alimento, alimentación, mortalidad, muestreos), el hardening
+de consistencia de sincronización (Fase 3.5) y calidad del agua/
+alertas/planificación (Fase 4), se añadió el resto del dominio
+productivo y económico: proveedores y clientes, compras (con costo de
+inventario de alimento por promedio ponderado histórico), gastos,
+cosechas (una salida más del ledger de peces, igual criterio que
+mortalidad/traslados), ventas (con balance de kg disponibles por
+cosecha) y la economía de cada lote (costo directo, costo/kg,
+ingresos, ganancia y margen) — todo offline-first, con dos comandos de
+negocio compuestos nuevos (`RegisterPurchase`, `RegisterSale`) que
+garantizan atomicidad real en el servidor. Ver
+[`ECONOMICS.md`](./ECONOMICS.md) para la política contable completa
+(qué es una compra vs un gasto, cómo se evita el doble conteo, el
+algoritmo de costo de alimento), y
+[`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) junto con las
+secciones
 ["Modelo de producción piscícola" (Fase 2)](./OFFLINE_SYNC.md#8-modelo-de-producción-piscícola-fase-2),
-["Operación diaria" (Fase 3)](./OFFLINE_SYNC.md#9-operación-diaria-alimento-mortalidad-y-muestreos-fase-3)
-y ["Calidad del agua, alertas y planificación" (Fase 4)](./OFFLINE_SYNC.md#11-calidad-del-agua-alertas-y-planificación-fase-4)
+["Operación diaria" (Fase 3)](./OFFLINE_SYNC.md#9-operación-diaria-alimento-mortalidad-y-muestreos-fase-3),
+["Calidad del agua, alertas y planificación" (Fase 4)](./OFFLINE_SYNC.md#11-calidad-del-agua-alertas-y-planificación-fase-4)
+y ["Economía y cierre productivo" (Fase 5)](./OFFLINE_SYNC.md#12-economía-y-cierre-productivo-fase-5)
 de `OFFLINE_SYNC.md`.
 
 ## Stack
@@ -92,7 +98,7 @@ Abre <http://localhost:3000>.
 | `npm run typecheck` | Comprobación de tipos (`tsc --noEmit`) |
 | `npm run test` | Tests unitarios y de integración (Vitest) |
 | `npm run test:watch` | Vitest en modo watch |
-| `npm run test:e2e` | Tests E2E offline (Playwright; compila y levanta un build de producción automáticamente): escenario base (`tests/e2e/offline.spec.ts`), producción piscícola (`tests/e2e/production.spec.ts`), operación diaria (`tests/e2e/dailyOperations.spec.ts`) y calidad del agua + tareas (`tests/e2e/waterQualityAndTasks.spec.ts`) |
+| `npm run test:e2e` | Tests E2E offline (Playwright; compila y levanta un build de producción automáticamente): escenario base (`tests/e2e/offline.spec.ts`), producción piscícola (`tests/e2e/production.spec.ts`), operación diaria (`tests/e2e/dailyOperations.spec.ts`), calidad del agua + tareas (`tests/e2e/waterQualityAndTasks.spec.ts`) y economía y cierre productivo (`tests/e2e/economics.spec.ts`) |
 | `npm run db:migrate` | Aplica migraciones de Prisma (desarrollo) |
 | `npm run db:migrate:deploy` | Aplica migraciones ya creadas (producción/CI) |
 | `npm run db:generate` | Regenera el cliente de Prisma |
@@ -144,7 +150,10 @@ npm run test
 # tareas (medición + dos tareas 100% offline, cerrar/reabrir sin
 # conexión, una alerta de oxígeno bajo generada localmente sin
 # conexión, completar una tarea offline, reconectar y comprobar en
-# Postgres que no hay duplicados).
+# Postgres que no hay duplicados) + economía y cierre productivo
+# (compra de alimento + cosecha parcial + cliente nuevo + venta contra
+# esa cosecha + gasto directo de lote, 100% offline, cerrar/reabrir sin
+# conexión, reconectar y comprobar en Postgres que no hay duplicados).
 npm run test:e2e
 ```
 
@@ -192,6 +201,13 @@ src/
     calidad-agua/      Últimas mediciones, alertas activas, registro
     tareas/            Hoy/Próximas/Vencidas/Completadas, crear/completar
     calendario/        Agenda + vista mensual simple
+    proveedores/       Alta/listado/desactivación de proveedores
+    clientes/          Alta/listado/desactivación de clientes
+    compras/           Listado + registro de compras (alimento, alevines...)
+    gastos/            Listado + registro de gastos (con/sin lote/estanque)
+    cosechas/          Listado + registro de cosechas
+    ventas/            Listado + registro de ventas (contra cosecha o externas)
+    economia/          Resumen económico general de la finca
   components/         Componentes de UI (layout, sync, pwa, estanques)
   hooks/              Hooks de React (estado de sincronización)
   lib/
@@ -200,17 +216,19 @@ src/
                        alimento, biomasa, peso estimado, crecimiento,
                        FCR, código de lote, geometría de estanque,
                        formato numérico, alertas de calidad del agua,
-                       clasificación de tareas) — sin dependencias de
-                       Dexie ni de Prisma, usadas por igual desde el
-                       cliente y el servidor
+                       clasificación de tareas, costo de inventario de
+                       alimento, economía de lote, dinero) — sin
+                       dependencias de Dexie ni de Prisma, usadas por
+                       igual desde el cliente y el servidor
     server/           Cliente Prisma (servidor)
     sync/             Motor de sincronización cliente + protocolo
     validation/       Esquemas Zod compartidos cliente/servidor
     labels.ts         Textos en español de enums de dominio
   test/               Configuración de Vitest
 tests/e2e/            Tests Playwright: escenario offline base,
-                       producción piscícola, operación diaria y
-                       calidad del agua + tareas
+                       producción piscícola, operación diaria,
+                       calidad del agua + tareas, y economía y cierre
+                       productivo
 ```
 
 ## Documentación
@@ -218,3 +236,4 @@ tests/e2e/            Tests Playwright: escenario offline base,
 - [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) — arquitectura completa, modelo de datos, fases, riesgos.
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — cómo está construido lo que ya existe.
 - [`OFFLINE_SYNC.md`](./OFFLINE_SYNC.md) — offline y sincronización en detalle, con diagramas.
+- [`ECONOMICS.md`](./ECONOMICS.md) — política contable de la Fase 5: compra vs gasto, costo de inventario de alimento, economía de un lote, márgenes, limitaciones.
