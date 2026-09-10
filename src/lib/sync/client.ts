@@ -2,16 +2,25 @@
 // lógica de reintentos ni de estado: eso vive en engine.ts. Este módulo
 // solo sabe hablar el protocolo (IMPLEMENTATION_PLAN.md §6.3).
 import type {
+  CustomerRecord,
+  ExpenseRecord,
+  FarmSettingsRecord,
   FeedingRecordRecord,
   FeedInventoryMovementRecord,
   FeedRecord,
   FishBatchRecord,
   FishTransferRecord,
+  HarvestRecord,
   MortalityRecordRecord,
   PondRecord,
+  PurchaseLineRecord,
+  PurchaseRecord,
+  SaleLineRecord,
+  SaleRecord,
   SamplingRecord,
   SpeciesRecord,
   StockingRecord,
+  SupplierRecord,
   SyncQueueRecord,
   TaskRecord,
   WaterQualityRecordRecord,
@@ -70,6 +79,15 @@ export interface PullResponse {
   samplings: SamplingRecord[];
   waterQualityRecords: WaterQualityRecordRecord[];
   tasks: TaskRecord[];
+  farmSettings: FarmSettingsRecord[];
+  suppliers: SupplierRecord[];
+  customers: CustomerRecord[];
+  purchases: PurchaseRecord[];
+  purchaseLines: PurchaseLineRecord[];
+  expenses: ExpenseRecord[];
+  harvests: HarvestRecord[];
+  sales: SaleRecord[];
+  saleLines: SaleLineRecord[];
   serverTime: string;
 }
 

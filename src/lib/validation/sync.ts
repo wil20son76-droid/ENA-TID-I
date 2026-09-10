@@ -30,6 +30,20 @@ export const syncEntityTypeSchema = z.enum([
   // Fase 4 (calidad del agua, alertas y planificación).
   "WaterQualityRecord",
   "Task",
+  // Fase 5 (economía y cierre productivo).
+  "FarmSettings",
+  "Supplier",
+  "Customer",
+  "Expense",
+  "Harvest",
+  "Purchase",
+  "Sale",
+  // Comandos de negocio compuestos (Fase 5, mismo criterio que
+  // RegisterFeeding/CreateFeedWithInitialStock): el cliente nunca envía
+  // Purchase+PurchaseLine (+ FeedInventoryMovement) ni Sale+SaleLine como
+  // operaciones independientes, siempre como UN solo comando.
+  "RegisterPurchase",
+  "RegisterSale",
 ]);
 export const pondStatusSchema = z.enum([
   "EMPTY",
@@ -72,6 +86,40 @@ export const mortalityCauseSchema = z.enum([
 ]);
 export const taskStatusSchema = z.enum(["PENDING", "COMPLETED", "CANCELLED"]);
 export const taskPrioritySchema = z.enum(["LOW", "NORMAL", "HIGH", "URGENT"]);
+
+// --- Fase 5: economía y cierre productivo ---
+export const customerTypeSchema = z.enum([
+  "INDIVIDUAL",
+  "RESTAURANT",
+  "MARKET",
+  "DISTRIBUTOR",
+  "WHOLESALER",
+  "OTHER",
+]);
+export const paymentStatusSchema = z.enum(["PENDING", "PARTIAL", "PAID"]);
+export const purchaseItemTypeSchema = z.enum([
+  "FEED",
+  "FRY",
+  "MEDICINE",
+  "MATERIAL",
+  "EQUIPMENT",
+  "OTHER",
+]);
+export const expenseCategorySchema = z.enum([
+  "FRY",
+  "FUEL",
+  "ELECTRICITY",
+  "LABOR",
+  "TRANSPORT",
+  "MAINTENANCE",
+  "CONSTRUCTION",
+  "TOOLS",
+  "EQUIPMENT",
+  "MEDICINE",
+  "SERVICES",
+  "OTHER",
+]);
+export const harvestTypeSchema = z.enum(["PARTIAL", "TOTAL"]);
 
 // Campos de auditoría completos: entidades mutables (Species, Pond,
 // FishBatch), que sí se editan y por tanto necesitan versión para
@@ -362,6 +410,168 @@ export const taskPayloadSchema = z.object({
   ...auditFieldsSchema,
 });
 
+// Fase 5: FarmSettings (§2) — singleton mutable, mismo criterio LWW que
+// Species/Pond/Feed/Task. `id` no es un UUID: siempre es la cadena fija
+// "default" (ver FARM_SETTINGS_ID en src/lib/db/types.ts).
+export const farmSettingsPayloadSchema = z.object({
+  id: z.literal("default"),
+  currencyCode: z.string().min(1).max(10),
+  currencySymbol: z.string().min(1).max(10),
+  ...auditFieldsSchema,
+});
+
+// Proveedor/Cliente (§4-§7): mutables, mismo criterio LWW.
+export const supplierPayloadSchema = z.object({
+  id: z.uuid(),
+  name: z.string().min(1).max(200),
+  contactName: z.string().max(200).nullable(),
+  phone: z.string().max(50).nullable(),
+  whatsapp: z.string().max(50).nullable(),
+  locality: z.string().max(200).nullable(),
+  address: z.string().max(500).nullable(),
+  notes: z.string().max(2000).nullable(),
+  active: z.boolean(),
+  ...auditFieldsSchema,
+});
+
+export const customerPayloadSchema = z.object({
+  id: z.uuid(),
+  name: z.string().min(1).max(200),
+  type: customerTypeSchema,
+  phone: z.string().max(50).nullable(),
+  whatsapp: z.string().max(50).nullable(),
+  locality: z.string().max(200).nullable(),
+  address: z.string().max(500).nullable(),
+  notes: z.string().max(2000).nullable(),
+  active: z.boolean(),
+  ...auditFieldsSchema,
+});
+
+// Compra/Venta (§8-§13, §27-§32): la CREACIÓN siempre llega como comando
+// compuesto (RegisterPurchase/RegisterSale, más abajo) — este esquema
+// solo se usa para la única edición que la UI permite sobre una que ya
+// existe: el estado de pago (§32, §57).
+export const purchasePayloadSchema = z.object({
+  id: z.uuid(),
+  supplierId: z.uuid().nullable(),
+  date: z.iso.datetime(),
+  referenceNumber: z.string().max(100).nullable(),
+  totalAmount: z.number().nonnegative(),
+  paymentStatus: paymentStatusSchema,
+  amountPaid: z.number().nonnegative(),
+  notes: z.string().max(2000).nullable(),
+  ...auditFieldsSchema,
+});
+
+export const salePayloadSchema = z.object({
+  id: z.uuid(),
+  customerId: z.uuid().nullable(),
+  date: z.iso.datetime(),
+  paymentStatus: paymentStatusSchema,
+  amountPaid: z.number().nonnegative(),
+  totalAmount: z.number().nonnegative(),
+  notes: z.string().max(2000).nullable(),
+  ...auditFieldsSchema,
+});
+
+// Gasto (§17-§19): append-only con anulación auditada (deletedAt +
+// voidReason), nunca borrado físico de un registro ya sincronizado (§58).
+export const expensePayloadSchema = z.object({
+  id: z.uuid(),
+  date: z.iso.datetime(),
+  category: expenseCategorySchema,
+  description: z.string().min(1).max(500),
+  quantity: z.number().positive().nullable(),
+  unit: z.string().max(50).nullable(),
+  unitPrice: z.number().nonnegative().nullable(),
+  totalAmount: z.number().positive(),
+  supplierId: z.uuid().nullable(),
+  batchId: z.uuid().nullable(),
+  pondId: z.uuid().nullable(),
+  notes: z.string().max(2000).nullable(),
+  voidReason: z.string().max(500).nullable(),
+  deviceId: z.string().min(1).max(200),
+  createdAt: z.iso.datetime(),
+  deletedAt: z.iso.datetime().nullable(),
+});
+
+// Cosecha (§20-§26): evento append-only, mismo criterio que
+// Stocking/FishTransfer/MortalityRecord.
+export const harvestPayloadSchema = z.object({
+  id: z.uuid(),
+  batchId: z.uuid(),
+  pondId: z.uuid(),
+  date: z.iso.datetime(),
+  quantityFish: z.number().int().positive(),
+  totalWeightKg: z.number().positive(),
+  averageWeightG: z.number().positive(),
+  harvestType: harvestTypeSchema,
+  responsibleName: z.string().max(200).nullable(),
+  notes: z.string().max(2000).nullable(),
+  deviceId: z.string().min(1).max(200),
+  createdAt: z.iso.datetime(),
+  deletedAt: z.iso.datetime().nullable(),
+});
+
+// Líneas de compra/venta: nunca se envían como entidad independiente,
+// solo anidadas dentro de RegisterPurchase/RegisterSale.
+const purchaseLineInCommandSchema = z.object({
+  id: z.uuid(),
+  itemType: purchaseItemTypeSchema,
+  feedId: z.uuid().nullable(),
+  description: z.string().min(1).max(500),
+  quantity: z.number().positive(),
+  unit: z.string().min(1).max(50),
+  unitPrice: z.number().nonnegative(),
+  totalAmount: z.number().nonnegative(),
+});
+
+const purchaseLineFeedMovementSchema = z.object({
+  id: z.uuid(),
+  feedId: z.uuid(),
+  quantityKg: z.number().positive(),
+  unitCostPerKg: z.number().nonnegative().nullable(),
+  totalCost: z.number().nonnegative().nullable(),
+  purchaseLineId: z.uuid(),
+});
+
+export const registerPurchasePayloadSchema = z.object({
+  id: z.uuid(),
+  supplierId: z.uuid().nullable(),
+  date: z.iso.datetime(),
+  referenceNumber: z.string().max(100).nullable(),
+  totalAmount: z.number().nonnegative(),
+  paymentStatus: paymentStatusSchema,
+  amountPaid: z.number().nonnegative(),
+  notes: z.string().max(2000).nullable(),
+  ...auditFieldsSchema,
+  lines: z.array(purchaseLineInCommandSchema).min(1),
+  feedMovements: z.array(purchaseLineFeedMovementSchema),
+});
+
+const saleLineInCommandSchema = z.object({
+  id: z.uuid(),
+  batchId: z.uuid(),
+  harvestId: z.uuid().nullable(),
+  description: z.string().min(1).max(500),
+  quantityFish: z.number().int().positive().nullable(),
+  weightKg: z.number().positive(),
+  pricePerKg: z.number().positive(),
+  totalAmount: z.number().nonnegative(),
+});
+
+export const registerSalePayloadSchema = z.object({
+  id: z.uuid(),
+  customerId: z.uuid().nullable(),
+  date: z.iso.datetime(),
+  paymentStatus: paymentStatusSchema,
+  amountPaid: z.number().nonnegative(),
+  totalAmount: z.number().nonnegative(),
+  notes: z.string().max(2000).nullable(),
+  ...auditFieldsSchema,
+  lines: z.array(saleLineInCommandSchema).min(1),
+});
+
 export type SpeciesPayload = z.infer<typeof speciesPayloadSchema>;
 export type PondPayload = z.infer<typeof pondPayloadSchema>;
 export type FishBatchPayload = z.infer<typeof fishBatchPayloadSchema>;
@@ -376,6 +586,15 @@ export type RegisterFeedingPayload = z.infer<typeof registerFeedingPayloadSchema
 export type CreateFeedWithInitialStockPayload = z.infer<typeof createFeedWithInitialStockPayloadSchema>;
 export type WaterQualityRecordPayload = z.infer<typeof waterQualityRecordPayloadSchema>;
 export type TaskPayload = z.infer<typeof taskPayloadSchema>;
+export type FarmSettingsPayload = z.infer<typeof farmSettingsPayloadSchema>;
+export type SupplierPayload = z.infer<typeof supplierPayloadSchema>;
+export type CustomerPayload = z.infer<typeof customerPayloadSchema>;
+export type PurchasePayload = z.infer<typeof purchasePayloadSchema>;
+export type SalePayload = z.infer<typeof salePayloadSchema>;
+export type ExpensePayload = z.infer<typeof expensePayloadSchema>;
+export type HarvestPayload = z.infer<typeof harvestPayloadSchema>;
+export type RegisterPurchasePayload = z.infer<typeof registerPurchasePayloadSchema>;
+export type RegisterSalePayload = z.infer<typeof registerSalePayloadSchema>;
 
 const basePushOperationSchema = z.object({
   // Id de la propia operación de sincronización — es la clave de
@@ -442,6 +661,42 @@ export const pushOperationSchema = z.discriminatedUnion("entityType", [
   basePushOperationSchema.extend({
     entityType: z.literal("Task"),
     payload: taskPayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("FarmSettings"),
+    payload: farmSettingsPayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("Supplier"),
+    payload: supplierPayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("Customer"),
+    payload: customerPayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("Expense"),
+    payload: expensePayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("Harvest"),
+    payload: harvestPayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("Purchase"),
+    payload: purchasePayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("Sale"),
+    payload: salePayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("RegisterPurchase"),
+    payload: registerPurchasePayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("RegisterSale"),
+    payload: registerSalePayloadSchema,
   }),
 ]);
 

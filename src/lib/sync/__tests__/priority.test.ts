@@ -48,6 +48,31 @@ describe("getSyncPriority", () => {
     expect(getSyncPriority("FeedingRecord")).toBe(4);
     expect(getSyncPriority("RegisterFeeding")).toBe(4);
   });
+
+  it("Fase 5, nivel 1: Supplier/Customer/FarmSettings son catálogos sin dependencias", () => {
+    expect(getSyncPriority("Supplier")).toBe(1);
+    expect(getSyncPriority("Customer")).toBe(1);
+    expect(getSyncPriority("FarmSettings")).toBe(1);
+  });
+
+  it("Fase 5, nivel 2: RegisterPurchase/Purchase dependen solo de catálogos de nivel 1", () => {
+    expect(getSyncPriority("RegisterPurchase")).toBe(2);
+    expect(getSyncPriority("Purchase")).toBe(2);
+  });
+
+  it("Fase 5, nivel 3: Expense no valida balance, no necesita esperar a Stocking", () => {
+    expect(getSyncPriority("Expense")).toBe(3);
+  });
+
+  it("Fase 5, nivel 4: Harvest compite por el mismo balance que traslados/mortalidad", () => {
+    expect(getSyncPriority("Harvest")).toBe(4);
+  });
+
+  it("Fase 5, nivel 5: RegisterSale/Sale dependen de que un Harvest referenciado ya se haya aplicado", () => {
+    expect(getSyncPriority("RegisterSale")).toBe(5);
+    expect(getSyncPriority("Sale")).toBe(5);
+    expect(getSyncPriority("RegisterSale")).toBeGreaterThan(getSyncPriority("Harvest"));
+  });
 });
 
 describe("getDependencyEntityIds", () => {
@@ -119,6 +144,38 @@ describe("getDependencyEntityIds", () => {
       "p-1",
       "b-1",
     ]);
+  });
+
+  it("Fase 5: Supplier/Customer/FarmSettings no dependen de nada", () => {
+    expect(getDependencyEntityIds("Supplier", {})).toEqual([]);
+    expect(getDependencyEntityIds("Customer", {})).toEqual([]);
+    expect(getDependencyEntityIds("FarmSettings", {})).toEqual([]);
+  });
+
+  it("Fase 5: RegisterPurchase/Purchase dependen solo del supplierId opcional", () => {
+    expect(getDependencyEntityIds("RegisterPurchase", { supplierId: "s-1" })).toEqual(["s-1"]);
+    expect(getDependencyEntityIds("RegisterPurchase", {})).toEqual([]);
+    expect(getDependencyEntityIds("Purchase", { supplierId: "s-1" })).toEqual(["s-1"]);
+  });
+
+  it("Fase 5: Expense depende de supplierId/batchId/pondId, todos opcionales", () => {
+    expect(getDependencyEntityIds("Expense", {})).toEqual([]);
+    expect(
+      getDependencyEntityIds("Expense", { supplierId: "s-1", batchId: "b-1", pondId: "p-1" }),
+    ).toEqual(["s-1", "b-1", "p-1"]);
+  });
+
+  it("Fase 5: Harvest depende de batchId + pondId", () => {
+    expect(getDependencyEntityIds("Harvest", { batchId: "b-1", pondId: "p-1" })).toEqual([
+      "b-1",
+      "p-1",
+    ]);
+  });
+
+  it("Fase 5: RegisterSale/Sale dependen solo del customerId opcional a nivel de payload", () => {
+    expect(getDependencyEntityIds("RegisterSale", { customerId: "c-1" })).toEqual(["c-1"]);
+    expect(getDependencyEntityIds("RegisterSale", {})).toEqual([]);
+    expect(getDependencyEntityIds("Sale", { customerId: "c-1" })).toEqual(["c-1"]);
   });
 
   it("payload no-objeto o campos faltantes no rompe: devuelve solo los ids presentes", () => {

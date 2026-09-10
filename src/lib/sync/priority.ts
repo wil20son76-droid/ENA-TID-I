@@ -33,28 +33,56 @@ const SYNC_PRIORITY: Record<SyncEntityType, number> = {
   Pond: 1,
   Feed: 1,
   CreateFeedWithInitialStock: 1,
+  // Fase 5 (§56 del encargo): Supplier/Customer/FarmSettings son
+  // catálogos base sin dependencias, igual criterio que Species/Pond/Feed.
+  Supplier: 1,
+  Customer: 1,
+  FarmSettings: 1,
   // Nivel 2: depende de un catálogo de nivel 1.
   FishBatch: 2,
+  // RegisterPurchase depende solo de Supplier (opcional) y Feed
+  // (opcional, si alguna línea es de alimento) — ambos nivel 1, así que
+  // nivel 2 basta; no necesita esperar a Stocking porque no valida
+  // ningún balance de peces. La actualización de estado de pago
+  // (entityType "Purchase") comparte nivel: como es SIEMPRE una
+  // operación posterior a la creación por RegisterPurchase, el
+  // desempate por `createdAt` dentro del mismo nivel ya garantiza que
+  // la creación se envíe primero.
+  RegisterPurchase: 2,
+  Purchase: 2,
   // Nivel 3: depende de FishBatch (nivel 2) + Pond (nivel 1). También
   // WaterQualityRecord/Task (Fase 4, §32 del encargo): dependen de Pond
   // (Task solo opcionalmente) y opcionalmente de FishBatch, pero —a
   // diferencia del nivel 4— ninguna de las dos valida balance de peces
   // ni de alimento, así que no necesitan esperar a que Stocking se haya
-  // aplicado: solo que exista el Pond/FishBatch que referencian.
+  // aplicado: solo que exista el Pond/FishBatch que referencian. Expense
+  // (Fase 5, §56) es igual: nunca valida balance, solo necesita que
+  // Supplier/FishBatch/Pond (si están asignados) ya existan.
   Stocking: 3,
   WaterQualityRecord: 3,
   Task: 3,
+  Expense: 3,
   // Nivel 4: eventos que dependen de FishBatch/Pond/Feed ya existentes,
   // y cuya validación de negocio (balance/stock) además necesita que
   // Stocking ya se haya aplicado para no fallar como "conflict" por un
   // balance que en realidad sí existe, solo que el servidor no lo vio
-  // todavía.
+  // todavía. Harvest (Fase 5, §56) comparte el mismo criterio que
+  // FishTransfer/MortalityRecord: compite por el mismo balance de peces.
   FishTransfer: 4,
   MortalityRecord: 4,
   Sampling: 4,
   FeedInventoryMovement: 4,
   FeedingRecord: 4,
   RegisterFeeding: 4,
+  Harvest: 4,
+  // Nivel 5: RegisterSale depende de FishBatch (nivel 2), Customer
+  // (nivel 1) y, si la línea referencia una cosecha, de que ESA Harvest
+  // ya se haya aplicado (nivel 4) — su propia validación de balance
+  // (§30-§31) necesita ver el Harvest real, no solo que exista. La
+  // actualización de estado de pago ("Sale") comparte nivel por el mismo
+  // motivo que "Purchase" arriba.
+  RegisterSale: 5,
+  Sale: 5,
 };
 
 /** Prioridad de sincronización de un tipo de entidad — más bajo = antes. */
@@ -125,6 +153,40 @@ export function getDependencyEntityIds(entityType: SyncEntityType, payload: unkn
       const pondId = readField(payload, "pondId");
       const batchId = readField(payload, "batchId");
       return [pondId, batchId].filter((id): id is string => !!id);
+    }
+    // Fase 5 (§56 del encargo de Fase 5).
+    case "Supplier":
+    case "Customer":
+    case "FarmSettings":
+      return [];
+    case "RegisterPurchase":
+    case "Purchase": {
+      const supplierId = readField(payload, "supplierId");
+      return supplierId ? [supplierId] : [];
+    }
+    case "Expense": {
+      const supplierId = readField(payload, "supplierId");
+      const batchId = readField(payload, "batchId");
+      const pondId = readField(payload, "pondId");
+      return [supplierId, batchId, pondId].filter((id): id is string => !!id);
+    }
+    case "Harvest": {
+      const batchId = readField(payload, "batchId");
+      const pondId = readField(payload, "pondId");
+      return [batchId, pondId].filter((id): id is string => !!id);
+    }
+    case "RegisterSale":
+    case "Sale": {
+      // `customerId` es la única dependencia extraíble de forma genérica
+      // en el nivel superior del payload; las dependencias por línea
+      // (batchId/harvestId de cada SaleLine) no se resuelven aquí porque
+      // `getDependencyEntityIds` solo se usa para excluir una operación
+      // cuya dependencia esté en "error" (§14) — el batchId/harvestId de
+      // las líneas ya se validan de verdad dentro de la transacción del
+      // servidor (applyRegisterSaleOperation), que es donde importa que
+      // sean correctos, no solo que "no estén en error" en la cola local.
+      const customerId = readField(payload, "customerId");
+      return customerId ? [customerId] : [];
     }
   }
 }

@@ -13,23 +13,44 @@
 // balance, no de edición concurrente — ver applyFishTransferOperation y
 // OFFLINE_SYNC.md §8 (multi-dispositivo). WaterQualityRecord no valida
 // ningún balance (§1: es solo un historial de mediciones).
+//
+// Fase 5 (economía y cierre productivo): Supplier/Customer/FarmSettings
+// son mutables LWW, igual criterio que Species/Pond/Feed/Task.
+// Purchase/Sale también son LWW, pero la UI solo los reedita para su
+// estado de pago — su creación real siempre llega como el comando
+// compuesto RegisterPurchase/RegisterSale (ver más abajo), nunca como un
+// "Purchase"/"Sale" CREATE suelto. PurchaseLine, Expense, Harvest y
+// SaleLine son append-only, mismo criterio que Stocking/FishTransfer.
+// Harvest valida balance de peces (mismo lock por batchId que
+// FishTransfer/MortalityRecord); RegisterSale valida balance de kg
+// disponibles por cosecha (lock por harvestId) cuando alguna línea
+// referencia una.
 import type { Prisma } from "@/generated/prisma/client";
 import { getBatchPondBalance } from "@/lib/domain/batchLedger";
 import { getFeedStock, isFeedExitMovement } from "@/lib/domain/feedLedger";
 import type {
   CreateFeedWithInitialStockPayload,
+  CustomerPayload,
+  ExpensePayload,
+  FarmSettingsPayload,
   FeedingRecordPayload,
   FeedInventoryMovementPayload,
   FeedPayload,
   FishBatchPayload,
   FishTransferPayload,
+  HarvestPayload,
   MortalityRecordPayload,
   PondPayload,
+  PurchasePayload,
   PushOperation,
   RegisterFeedingPayload,
+  RegisterPurchasePayload,
+  RegisterSalePayload,
+  SalePayload,
   SamplingPayload,
   SpeciesPayload,
   StockingPayload,
+  SupplierPayload,
   TaskPayload,
   WaterQualityRecordPayload,
 } from "@/lib/validation/sync";
@@ -297,6 +318,234 @@ function taskData(payload: TaskPayload) {
   };
 }
 
+// --- Fase 5: economía y cierre productivo ---
+
+function farmSettingsData(payload: FarmSettingsPayload) {
+  return {
+    id: payload.id,
+    currencyCode: payload.currencyCode,
+    currencySymbol: payload.currencySymbol,
+    createdAt: new Date(payload.createdAt),
+    updatedAt: new Date(payload.updatedAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+    version: payload.version,
+    deviceId: payload.deviceId,
+    createdBy: payload.createdBy,
+    updatedBy: payload.updatedBy,
+  };
+}
+
+function supplierData(payload: SupplierPayload) {
+  return {
+    id: payload.id,
+    name: payload.name,
+    contactName: payload.contactName,
+    phone: payload.phone,
+    whatsapp: payload.whatsapp,
+    locality: payload.locality,
+    address: payload.address,
+    notes: payload.notes,
+    active: payload.active,
+    createdAt: new Date(payload.createdAt),
+    updatedAt: new Date(payload.updatedAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+    version: payload.version,
+    deviceId: payload.deviceId,
+    createdBy: payload.createdBy,
+    updatedBy: payload.updatedBy,
+  };
+}
+
+function customerData(payload: CustomerPayload) {
+  return {
+    id: payload.id,
+    name: payload.name,
+    type: payload.type,
+    phone: payload.phone,
+    whatsapp: payload.whatsapp,
+    locality: payload.locality,
+    address: payload.address,
+    notes: payload.notes,
+    active: payload.active,
+    createdAt: new Date(payload.createdAt),
+    updatedAt: new Date(payload.updatedAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+    version: payload.version,
+    deviceId: payload.deviceId,
+    createdBy: payload.createdBy,
+    updatedBy: payload.updatedBy,
+  };
+}
+
+function purchaseData(payload: PurchasePayload) {
+  return {
+    id: payload.id,
+    supplierId: payload.supplierId,
+    date: new Date(payload.date),
+    referenceNumber: payload.referenceNumber,
+    totalAmount: payload.totalAmount,
+    paymentStatus: payload.paymentStatus,
+    amountPaid: payload.amountPaid,
+    notes: payload.notes,
+    createdAt: new Date(payload.createdAt),
+    updatedAt: new Date(payload.updatedAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+    version: payload.version,
+    deviceId: payload.deviceId,
+    createdBy: payload.createdBy,
+    updatedBy: payload.updatedBy,
+  };
+}
+
+function saleData(payload: SalePayload) {
+  return {
+    id: payload.id,
+    customerId: payload.customerId,
+    date: new Date(payload.date),
+    paymentStatus: payload.paymentStatus,
+    amountPaid: payload.amountPaid,
+    totalAmount: payload.totalAmount,
+    notes: payload.notes,
+    createdAt: new Date(payload.createdAt),
+    updatedAt: new Date(payload.updatedAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+    version: payload.version,
+    deviceId: payload.deviceId,
+    createdBy: payload.createdBy,
+    updatedBy: payload.updatedBy,
+  };
+}
+
+function expenseData(payload: ExpensePayload) {
+  return {
+    id: payload.id,
+    date: new Date(payload.date),
+    category: payload.category,
+    description: payload.description,
+    quantity: payload.quantity,
+    unit: payload.unit,
+    unitPrice: payload.unitPrice,
+    totalAmount: payload.totalAmount,
+    supplierId: payload.supplierId,
+    batchId: payload.batchId,
+    pondId: payload.pondId,
+    notes: payload.notes,
+    voidReason: payload.voidReason,
+    deviceId: payload.deviceId,
+    createdAt: new Date(payload.createdAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+  };
+}
+
+function harvestData(payload: HarvestPayload) {
+  return {
+    id: payload.id,
+    batchId: payload.batchId,
+    pondId: payload.pondId,
+    date: new Date(payload.date),
+    quantityFish: payload.quantityFish,
+    totalWeightKg: payload.totalWeightKg,
+    averageWeightG: payload.averageWeightG,
+    harvestType: payload.harvestType,
+    responsibleName: payload.responsibleName,
+    notes: payload.notes,
+    deviceId: payload.deviceId,
+    createdAt: new Date(payload.createdAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+  };
+}
+
+function purchaseDataFromRegisterPayload(payload: RegisterPurchasePayload) {
+  return {
+    id: payload.id,
+    supplierId: payload.supplierId,
+    date: new Date(payload.date),
+    referenceNumber: payload.referenceNumber,
+    totalAmount: payload.totalAmount,
+    paymentStatus: payload.paymentStatus,
+    amountPaid: payload.amountPaid,
+    notes: payload.notes,
+    createdAt: new Date(payload.createdAt),
+    updatedAt: new Date(payload.updatedAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+    version: payload.version,
+    deviceId: payload.deviceId,
+    createdBy: payload.createdBy,
+    updatedBy: payload.updatedBy,
+  };
+}
+
+function purchaseLinesDataFromRegisterPayload(payload: RegisterPurchasePayload) {
+  return payload.lines.map((line) => ({
+    id: line.id,
+    purchaseId: payload.id,
+    itemType: line.itemType,
+    feedId: line.feedId,
+    description: line.description,
+    quantity: line.quantity,
+    unit: line.unit,
+    unitPrice: line.unitPrice,
+    totalAmount: line.totalAmount,
+    deviceId: payload.deviceId,
+    createdAt: new Date(payload.createdAt),
+    deletedAt: null,
+  }));
+}
+
+function feedMovementsDataFromRegisterPurchasePayload(payload: RegisterPurchasePayload) {
+  return payload.feedMovements.map((movement) => ({
+    id: movement.id,
+    feedId: movement.feedId,
+    movementType: "PURCHASE" as const,
+    quantityKg: movement.quantityKg,
+    unitCostPerKg: movement.unitCostPerKg,
+    totalCost: movement.totalCost,
+    date: new Date(payload.date),
+    sourceType: "PURCHASE",
+    sourceId: movement.purchaseLineId,
+    notes: null,
+    deviceId: payload.deviceId,
+    createdAt: new Date(payload.createdAt),
+    deletedAt: null,
+  }));
+}
+
+function saleDataFromRegisterPayload(payload: RegisterSalePayload) {
+  return {
+    id: payload.id,
+    customerId: payload.customerId,
+    date: new Date(payload.date),
+    paymentStatus: payload.paymentStatus,
+    amountPaid: payload.amountPaid,
+    totalAmount: payload.totalAmount,
+    notes: payload.notes,
+    createdAt: new Date(payload.createdAt),
+    updatedAt: new Date(payload.updatedAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+    version: payload.version,
+    deviceId: payload.deviceId,
+    createdBy: payload.createdBy,
+    updatedBy: payload.updatedBy,
+  };
+}
+
+function saleLinesDataFromRegisterPayload(payload: RegisterSalePayload) {
+  return payload.lines.map((line) => ({
+    id: line.id,
+    saleId: payload.id,
+    batchId: line.batchId,
+    harvestId: line.harvestId,
+    description: line.description,
+    quantityFish: line.quantityFish,
+    weightKg: line.weightKg,
+    pricePerKg: line.pricePerKg,
+    totalAmount: line.totalAmount,
+    deviceId: payload.deviceId,
+    createdAt: new Date(payload.createdAt),
+    deletedAt: null,
+  }));
+}
+
 // --- Comandos de negocio compuestos (Fase 3.5) ---
 
 function feedingRecordDataFromRegisterPayload(payload: RegisterFeedingPayload) {
@@ -478,7 +727,7 @@ async function getCurrentPondBalance(
   batchId: string,
   pondId: string,
 ): Promise<number> {
-  const [stockings, transfers, mortalities] = await Promise.all([
+  const [stockings, transfers, mortalities, harvests] = await Promise.all([
     tx.stocking.findMany({
       where: { batchId, deletedAt: null },
       select: { batchId: true, pondId: true, quantity: true },
@@ -491,8 +740,19 @@ async function getCurrentPondBalance(
       where: { batchId, deletedAt: null },
       select: { batchId: true, pondId: true, quantity: true },
     }),
+    tx.harvest.findMany({
+      where: { batchId, deletedAt: null },
+      select: { batchId: true, pondId: true, quantityFish: true },
+    }),
   ]);
-  return getBatchPondBalance(stockings, transfers, mortalities, batchId, pondId);
+  return getBatchPondBalance(
+    stockings,
+    transfers,
+    mortalities,
+    harvests.map((h) => ({ batchId: h.batchId, pondId: h.pondId, quantityFish: h.quantityFish })),
+    batchId,
+    pondId,
+  );
 }
 
 async function applyFishTransferOperation(
@@ -696,6 +956,173 @@ async function applyTaskOperation(
   return "applied";
 }
 
+// --- Fase 5: economía y cierre productivo ---
+
+/** FarmSettings (§2): singleton mutable, mismo criterio LWW que Species/Pond/Feed/Task. */
+async function applyFarmSettingsOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "FarmSettings" }>,
+): Promise<ApplyResult> {
+  const data = farmSettingsData(op.payload);
+
+  if (op.operation === "CREATE") {
+    // Puede llegar CREATE dos veces (dos dispositivos crean la
+    // configuración por defecto la primera vez que la piden, offline
+    // cada uno) — se resuelve como cualquier upsert LWW, nunca como un
+    // error de llave duplicada.
+    const current = await tx.farmSettings.findUnique({ where: { id: op.entityId } });
+    if (!current) {
+      await tx.farmSettings.create({ data });
+      return "applied";
+    }
+    if (data.version <= current.version) return "conflict";
+    await tx.farmSettings.update({ where: { id: op.entityId }, data });
+    return "applied";
+  }
+
+  const current = await tx.farmSettings.findUnique({ where: { id: op.entityId } });
+  if (!current) {
+    await tx.farmSettings.create({ data });
+    return "applied";
+  }
+  if (data.version <= current.version) return "conflict";
+  await tx.farmSettings.update({ where: { id: op.entityId }, data });
+  return "applied";
+}
+
+async function applySupplierOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "Supplier" }>,
+): Promise<ApplyResult> {
+  const data = supplierData(op.payload);
+
+  if (op.operation === "CREATE") {
+    await tx.supplier.create({ data });
+    return "applied";
+  }
+
+  const current = await tx.supplier.findUnique({ where: { id: op.entityId } });
+  if (!current) {
+    await tx.supplier.create({ data });
+    return "applied";
+  }
+  if (data.version <= current.version) return "conflict";
+  await tx.supplier.update({ where: { id: op.entityId }, data });
+  return "applied";
+}
+
+async function applyCustomerOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "Customer" }>,
+): Promise<ApplyResult> {
+  const data = customerData(op.payload);
+
+  if (op.operation === "CREATE") {
+    await tx.customer.create({ data });
+    return "applied";
+  }
+
+  const current = await tx.customer.findUnique({ where: { id: op.entityId } });
+  if (!current) {
+    await tx.customer.create({ data });
+    return "applied";
+  }
+  if (data.version <= current.version) return "conflict";
+  await tx.customer.update({ where: { id: op.entityId }, data });
+  return "applied";
+}
+
+/**
+ * Purchase (§32, §57): la creación real SIEMPRE llega como
+ * "RegisterPurchase" (más abajo) — este handler solo existe para la
+ * única edición que la UI permite: el estado de pago. Mismo criterio LWW
+ * que el resto de entidades mutables; si por alguna razón llega un CREATE
+ * suelto (dispositivo con cola vieja) se trata igual que Species/Pond: se
+ * crea si no existe, nunca se pierde el dato.
+ */
+async function applyPurchaseOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "Purchase" }>,
+): Promise<ApplyResult> {
+  const data = purchaseData(op.payload);
+
+  if (op.operation === "CREATE") {
+    // La creación real siempre llega como "RegisterPurchase": un CREATE
+    // suelto solo puede ser un reintento sobre algo que ya existe.
+    const current = await tx.purchase.findUnique({ where: { id: op.entityId } });
+    if (current) return "conflict";
+    await tx.purchase.create({ data });
+    return "applied";
+  }
+
+  const current = await tx.purchase.findUnique({ where: { id: op.entityId } });
+  if (!current) return "conflict"; // Nunca se marca pagada una compra que el servidor no ha visto.
+  if (data.version <= current.version) return "conflict";
+  await tx.purchase.update({ where: { id: op.entityId }, data });
+  return "applied";
+}
+
+async function applySaleOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "Sale" }>,
+): Promise<ApplyResult> {
+  const data = saleData(op.payload);
+
+  if (op.operation === "CREATE") {
+    const current = await tx.sale.findUnique({ where: { id: op.entityId } });
+    if (current) return "conflict";
+    await tx.sale.create({ data });
+    return "applied";
+  }
+
+  const current = await tx.sale.findUnique({ where: { id: op.entityId } });
+  if (!current) return "conflict";
+  if (data.version <= current.version) return "conflict";
+  await tx.sale.update({ where: { id: op.entityId }, data });
+  return "applied";
+}
+
+/**
+ * Gasto (§17-§19): append-only, sin ninguna validación de balance/stock —
+ * DELETE representa la anulación auditada (§58, nunca borrado físico).
+ */
+async function applyExpenseOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "Expense" }>,
+): Promise<ApplyResult> {
+  const data = expenseData(op.payload);
+  await tx.expense.upsert({ where: { id: op.entityId }, create: data, update: data });
+  return "applied";
+}
+
+/**
+ * Cosecha (§20-§26): mismo criterio que FishTransfer/MortalityRecord —
+ * nunca puede dejar el balance del lote/estanque en negativo, y dos
+ * cosechas concurrentes del mismo lote nunca deben poder "gastar" el
+ * mismo balance (§22-§23). Comparte el lock por batchId con
+ * traslados/mortalidad porque las tres compiten por el mismo balance.
+ */
+async function applyHarvestOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "Harvest" }>,
+): Promise<ApplyResult> {
+  if (op.operation !== "CREATE") {
+    const data = harvestData(op.payload);
+    await tx.harvest.upsert({ where: { id: op.entityId }, create: data, update: data });
+    return "applied";
+  }
+
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${op.payload.batchId})::bigint)`;
+
+  const available = await getCurrentPondBalance(tx, op.payload.batchId, op.payload.pondId);
+  if (op.payload.quantityFish > available) {
+    return "conflict";
+  }
+
+  await tx.harvest.create({ data: harvestData(op.payload) });
+  return "applied";
+}
+
 /**
  * "Registrar alimentación" como una única operación de negocio atómica
  * (Fase 3.5, §2 del encargo): antes, el cliente enviaba dos operaciones
@@ -776,6 +1203,144 @@ async function applyCreateFeedWithInitialStockOperation(
   return "applied";
 }
 
+/**
+ * "REGISTER_FEED_PURCHASE" y, en general, cualquier compra con líneas
+ * (§8-§13 del encargo de Fase 5): Purchase + PurchaseLine(s) + los
+ * FeedInventoryMovement PURCHASE que correspondan (una por cada línea de
+ * alimento) se crean en la MISMA transacción — nunca una Purchase sin sus
+ * líneas ni inventario sin su Purchase (§11). Ninguna escritura de esta
+ * operación valida un balance que pueda quedar negativo (una compra
+ * siempre es una ENTRADA de inventario), así que no hace falta lock de
+ * concurrencia aquí — solo verificar que el proveedor y los alimentos
+ * referenciados ya existan.
+ */
+async function applyRegisterPurchaseOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "RegisterPurchase" }>,
+): Promise<ApplyResult> {
+  const payload = op.payload;
+
+  if (payload.supplierId) {
+    const supplier = await tx.supplier.findUnique({ where: { id: payload.supplierId } });
+    if (!supplier) {
+      throw new Error(
+        "No se pudo registrar la compra: todavía no existe el proveedor en el servidor (pendiente de sincronizar).",
+      );
+    }
+  }
+
+  const feedIds = [...new Set(payload.lines.map((l) => l.feedId).filter((id): id is string => !!id))];
+  if (feedIds.length > 0) {
+    const feeds = await tx.feed.findMany({ where: { id: { in: feedIds } } });
+    if (feeds.length !== feedIds.length) {
+      throw new Error(
+        "No se pudo registrar la compra: todavía no existe alguno de los alimentos en el servidor (pendiente de sincronizar).",
+      );
+    }
+  }
+
+  await tx.purchase.create({ data: purchaseDataFromRegisterPayload(payload) });
+  await tx.purchaseLine.createMany({ data: purchaseLinesDataFromRegisterPayload(payload) });
+  if (payload.feedMovements.length > 0) {
+    await tx.feedInventoryMovement.createMany({
+      data: feedMovementsDataFromRegisterPurchasePayload(payload),
+    });
+  }
+
+  return "applied";
+}
+
+/**
+ * "REGISTER_SALE" (§27-§32 del encargo de Fase 5): Sale + SaleLine(s) se
+ * crean en la misma transacción (§51). Si alguna línea referencia una
+ * cosecha (`harvestId`), los kg disponibles de esa cosecha son
+ * `kg cosechados - kg ya vendidos` (§30) y nunca pueden quedar negativos
+ * (§31) — se bloquea por `harvestId` (mismo mecanismo que el lock por
+ * batchId/feedId de otras operaciones) para que dos ventas concurrentes
+ * de la misma cosecha nunca puedan ambas dar por válido el mismo saldo.
+ */
+async function applyRegisterSaleOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "RegisterSale" }>,
+): Promise<ApplyResult> {
+  const payload = op.payload;
+
+  if (payload.customerId) {
+    const customer = await tx.customer.findUnique({ where: { id: payload.customerId } });
+    if (!customer) {
+      throw new Error(
+        "No se pudo registrar la venta: todavía no existe el cliente en el servidor (pendiente de sincronizar).",
+      );
+    }
+  }
+
+  const batchIds = [...new Set(payload.lines.map((l) => l.batchId))];
+  const batches = await tx.fishBatch.findMany({ where: { id: { in: batchIds } } });
+  if (batches.length !== batchIds.length) {
+    throw new Error(
+      "No se pudo registrar la venta: todavía no existe alguno de los lotes en el servidor (pendiente de sincronizar).",
+    );
+  }
+
+  const harvestIds = [
+    ...new Set(payload.lines.map((l) => l.harvestId).filter((id): id is string => !!id)),
+  ];
+
+  if (harvestIds.length > 0) {
+    // Se bloquean en un orden determinista (ordenados) para evitar
+    // deadlocks entre dos ventas concurrentes que referencien las mismas
+    // dos cosechas en orden distinto.
+    for (const harvestId of [...harvestIds].sort()) {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${harvestId})::bigint)`;
+    }
+
+    const harvests = await tx.harvest.findMany({ where: { id: { in: harvestIds } } });
+    if (harvests.length !== harvestIds.length) {
+      throw new Error(
+        "No se pudo registrar la venta: todavía no existe alguna de las cosechas en el servidor (pendiente de sincronizar).",
+      );
+    }
+    const harvestById = new Map(harvests.map((h) => [h.id, h]));
+
+    const existingLines = await tx.saleLine.findMany({
+      where: { harvestId: { in: harvestIds }, deletedAt: null },
+      select: { harvestId: true, weightKg: true },
+    });
+    const soldByHarvest = new Map<string, number>();
+    for (const line of existingLines) {
+      const harvestId = line.harvestId as string;
+      soldByHarvest.set(harvestId, (soldByHarvest.get(harvestId) ?? 0) + Number(line.weightKg));
+    }
+
+    const requestedByHarvest = new Map<string, number>();
+    for (const line of payload.lines) {
+      if (!line.harvestId) continue;
+      requestedByHarvest.set(
+        line.harvestId,
+        (requestedByHarvest.get(line.harvestId) ?? 0) + line.weightKg,
+      );
+    }
+
+    for (const [harvestId, requestedKg] of requestedByHarvest) {
+      const harvest = harvestById.get(harvestId);
+      if (!harvest) continue;
+      const alreadySold = soldByHarvest.get(harvestId) ?? 0;
+      const available = Number(harvest.totalWeightKg) - alreadySold;
+      if (requestedKg > available) {
+        // Nunca se inventa un saldo ni se permite vender más kg de los
+        // disponibles de esa cosecha (§31): la operación queda como
+        // conflicto, sin escribir nada.
+        return "conflict";
+      }
+    }
+  }
+
+  await tx.sale.create({ data: saleDataFromRegisterPayload(payload) });
+  await tx.saleLine.createMany({ data: saleLinesDataFromRegisterPayload(payload) });
+
+  return "applied";
+}
+
 export async function applyOperation(
   tx: TransactionClient,
   op: PushOperation,
@@ -809,5 +1374,23 @@ export async function applyOperation(
       return applyWaterQualityRecordOperation(tx, op);
     case "Task":
       return applyTaskOperation(tx, op);
+    case "FarmSettings":
+      return applyFarmSettingsOperation(tx, op);
+    case "Supplier":
+      return applySupplierOperation(tx, op);
+    case "Customer":
+      return applyCustomerOperation(tx, op);
+    case "Purchase":
+      return applyPurchaseOperation(tx, op);
+    case "Sale":
+      return applySaleOperation(tx, op);
+    case "Expense":
+      return applyExpenseOperation(tx, op);
+    case "Harvest":
+      return applyHarvestOperation(tx, op);
+    case "RegisterPurchase":
+      return applyRegisterPurchaseOperation(tx, op);
+    case "RegisterSale":
+      return applyRegisterSaleOperation(tx, op);
   }
 }

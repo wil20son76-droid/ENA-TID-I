@@ -60,14 +60,28 @@ export function getConflictMessage(entityType: SyncEntityType, payload: unknown)
         ? `No se pudo sincronizar el registro de mortalidad de ${formatCount(quantity)} porque el balance del estanque cambió desde otro dispositivo.`
         : "No se pudo sincronizar el registro de mortalidad porque el balance del estanque cambió desde otro dispositivo.";
     }
+    case "Harvest": {
+      const quantityFish = readNumber(payload, "quantityFish");
+      return quantityFish != null
+        ? `No se pudo sincronizar la cosecha de ${formatCount(quantityFish)} porque el balance del estanque cambió desde otro dispositivo.`
+        : "No se pudo sincronizar la cosecha porque el balance del estanque cambió desde otro dispositivo.";
+    }
+    case "RegisterSale":
+      return "No se pudo sincronizar la venta porque el peso disponible de la cosecha referenciada cambió desde otro dispositivo.";
     case "Species":
     case "Pond":
     case "FishBatch":
     case "Feed":
     case "Task":
-      // Task es mutable, igual que Species/Pond — su conflicto SÍ es de
-      // versión (dos dispositivos editando la misma tarea offline, §34),
-      // así que el mensaje genérico de LWW es correcto aquí.
+    case "FarmSettings":
+    case "Supplier":
+    case "Customer":
+    case "Purchase":
+    case "Sale":
+      // Task/FarmSettings/Supplier/Customer/Purchase/Sale son mutables,
+      // igual que Species/Pond — su conflicto SÍ es de versión (dos
+      // dispositivos editando/pagando el mismo registro offline), así que
+      // el mensaje genérico de LWW es correcto aquí.
       return GENERIC_VERSION_CONFLICT;
     // Estas entidades nunca producen "conflict" en el servidor (son
     // append-only vía upsert, o su comando compuesto no valida balance),
@@ -77,6 +91,8 @@ export function getConflictMessage(entityType: SyncEntityType, payload: unknown)
     case "Sampling":
     case "CreateFeedWithInitialStock":
     case "WaterQualityRecord":
+    case "Expense":
+    case "RegisterPurchase":
       return GENERIC_VERSION_CONFLICT;
   }
 }

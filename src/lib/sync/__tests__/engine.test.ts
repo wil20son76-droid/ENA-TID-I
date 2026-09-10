@@ -30,6 +30,15 @@ function emptyPullResponse() {
     samplings: [],
     waterQualityRecords: [],
     tasks: [],
+    farmSettings: [],
+    suppliers: [],
+    customers: [],
+    purchases: [],
+    purchaseLines: [],
+    expenses: [],
+    harvests: [],
+    sales: [],
+    saleLines: [],
     serverTime: new Date().toISOString(),
   };
 }
@@ -268,6 +277,15 @@ describe("runSync", () => {
         samplings: [],
         waterQualityRecords: [],
         tasks: [],
+        farmSettings: [],
+        suppliers: [],
+        customers: [],
+        purchases: [],
+        purchaseLines: [],
+        expenses: [],
+        harvests: [],
+        sales: [],
+        saleLines: [],
         serverTime: now,
       });
     });
@@ -363,6 +381,15 @@ describe("runSync", () => {
         samplings: [],
         waterQualityRecords: [],
         tasks: [],
+        farmSettings: [],
+        suppliers: [],
+        customers: [],
+        purchases: [],
+        purchaseLines: [],
+        expenses: [],
+        harvests: [],
+        sales: [],
+        saleLines: [],
         serverTime: now,
       });
     });
@@ -489,6 +516,15 @@ describe("runSync", () => {
         ],
         waterQualityRecords: [],
         tasks: [],
+        farmSettings: [],
+        suppliers: [],
+        customers: [],
+        purchases: [],
+        purchaseLines: [],
+        expenses: [],
+        harvests: [],
+        sales: [],
+        saleLines: [],
         serverTime: now,
       });
     });

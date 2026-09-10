@@ -153,6 +153,15 @@ async function pullAndMerge(): Promise<void> {
       db.samplings,
       db.waterQualityRecords,
       db.tasks,
+      db.farmSettings,
+      db.suppliers,
+      db.customers,
+      db.purchases,
+      db.purchaseLines,
+      db.expenses,
+      db.harvests,
+      db.sales,
+      db.saleLines,
     ],
     async () => {
       for (const species of response.species) {
@@ -190,6 +199,33 @@ async function pullAndMerge(): Promise<void> {
       }
       for (const task of response.tasks) {
         await db.tasks.put(task);
+      }
+      for (const settings of response.farmSettings) {
+        await db.farmSettings.put(settings);
+      }
+      for (const supplier of response.suppliers) {
+        await db.suppliers.put(supplier);
+      }
+      for (const customer of response.customers) {
+        await db.customers.put(customer);
+      }
+      for (const purchase of response.purchases) {
+        await db.purchases.put(purchase);
+      }
+      for (const line of response.purchaseLines) {
+        await db.purchaseLines.put(line);
+      }
+      for (const expense of response.expenses) {
+        await db.expenses.put(expense);
+      }
+      for (const harvest of response.harvests) {
+        await db.harvests.put(harvest);
+      }
+      for (const sale of response.sales) {
+        await db.sales.put(sale);
+      }
+      for (const line of response.saleLines) {
+        await db.saleLines.put(line);
       }
     },
   );
