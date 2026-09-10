@@ -59,7 +59,7 @@ test.describe.serial("Logo de marca y recuperación de contraseña", () => {
     // login sin depender de que el archivo ya esté subido.
     const logo = page.getByAltText("ENA TID'I — Finca integral agropiscícola");
     await expect(logo).toBeAttached();
-    await expect(page.getByRole("heading", { name: "Mi Piscicultura" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "ENA TID’I" })).toBeVisible();
   });
 
   test("manifest.webmanifest y los íconos PWA responden 200", async ({ page, baseURL }) => {

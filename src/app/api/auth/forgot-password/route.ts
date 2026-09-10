@@ -69,7 +69,7 @@ export async function POST(request: Request) {
 
     await sendEmail({
       to: email,
-      subject: "Recupera tu contraseña — Mi Piscicultura",
+      subject: "Recupera tu contraseña — ENA TID’I",
       text: `Recibimos una solicitud para restablecer tu contraseña.\n\nSi fuiste tú, abre este enlace (válido por 30 minutos, un solo uso):\n${resetLink}\n\nSi no fuiste tú, ignora este correo — tu contraseña actual sigue funcionando.`,
       html: `<p>Recibimos una solicitud para restablecer tu contraseña.</p><p>Si fuiste tú, abre este enlace (válido por 30 minutos, un solo uso):</p><p><a href="${resetLink}">${resetLink}</a></p><p>Si no fuiste tú, ignora este correo — tu contraseña actual sigue funcionando.</p>`,
     });

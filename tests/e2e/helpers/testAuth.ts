@@ -63,7 +63,7 @@ export async function loginViaUi(
   await page.getByRole("button", { name: "Iniciar sesión" }).click();
   // Señal inequívoca de que AuthGate ya renderiza AppShell (el botón de
   // logout no existe en la pantalla de login, así que a diferencia del
-  // título "Mi Piscicultura" — presente en ambas pantallas — este sí
-  // distingue de forma confiable "ya adentro" de "todavía en el login").
+  // título "ENA TID'I" — presente en ambas pantallas — este sí distingue
+  // de forma confiable "ya adentro" de "todavía en el login").
   await expect(page.getByRole("button", { name: "Cerrar sesión" })).toBeVisible({ timeout: 15_000 });
 }

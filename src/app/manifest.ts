@@ -4,8 +4,8 @@ import type { MetadataRoute } from "next";
 // (convención de archivo de metadatos de App Router, ver IMPLEMENTATION_PLAN.md §7).
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Mi Piscicultura",
-    short_name: "Piscicultura",
+    name: "ENA TID’I",
+    short_name: "ENA TID’I",
     description: "Gestión offline-first de un emprendimiento piscícola.",
     start_url: "/",
     display: "standalone",

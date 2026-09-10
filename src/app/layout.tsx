@@ -19,12 +19,14 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Mi Piscicultura",
+  title: "ENA TID’I",
   description: "Gestión offline-first de un emprendimiento piscícola.",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Mi Piscicultura",
+    // Nombre bajo el ícono al instalar en iOS (pantalla de inicio) —
+    // iOS lo trunca a ~11-12 caracteres visibles, "ENA TID'I" cabe entero.
+    title: "ENA TID’I",
   },
 };
 

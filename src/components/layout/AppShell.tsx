@@ -81,7 +81,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-2">
               <Logo className="h-8 w-auto flex-shrink-0" />
-              <h1 className="truncate text-lg font-semibold">Mi Piscicultura</h1>
+              <h1 className="truncate text-lg font-semibold">ENA TID’I</h1>
             </div>
             <div className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
               <span>

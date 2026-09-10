@@ -12,7 +12,7 @@ export function PrintableReportHeader({ title }: { title: string }) {
       <div className="flex items-center gap-2">
         <Logo className="h-10 w-auto" />
         <div>
-          <p className="text-sm font-semibold text-zinc-900">Mi Piscicultura</p>
+          <p className="text-sm font-semibold text-zinc-900">ENA TID’I</p>
           <p className="text-xs text-zinc-500">{title}</p>
         </div>
       </div>

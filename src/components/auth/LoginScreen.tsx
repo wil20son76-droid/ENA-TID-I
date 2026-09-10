@@ -62,7 +62,7 @@ function LoginForm({ onSuccess, onForgot }: { onSuccess: (session: ClientSession
 
   return (
     <>
-      <h1 className="mb-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100">Mi Piscicultura</h1>
+      <h1 className="mb-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100">ENA TID’I</h1>
       <p className="mb-6 text-sm text-zinc-500 dark:text-zinc-400">
         Inicia sesión para continuar. Necesitas conexión solo esta vez — después podrás seguir
         registrando datos sin Internet hasta tu próximo inicio de sesión.
