@@ -26,6 +26,9 @@ import { NextResponse } from "next/server";
 import type { z } from "zod";
 
 import { prisma } from "@/lib/server/prisma";
+import { logger } from "@/lib/server/logger";
+import { authenticateRequest } from "@/lib/auth/serverAuth";
+import { canWriteEntity, type UserRole } from "@/lib/auth/permissions";
 import { pushRequestSchema, pushResultStatusSchema } from "@/lib/validation/sync";
 import { applyOperation } from "../_lib/applyOperation";
 
@@ -53,7 +56,22 @@ function isUniqueConstraintOnOperationId(error: unknown): boolean {
 
 async function processOperation(
   op: z.infer<typeof pushRequestSchema>["operations"][number],
+  role: UserRole,
 ): Promise<OperationResult> {
+  // Validación de permisos en servidor (§"Validación de permisos también
+  // en servidor" del encargo de Fase 7) — la barrera real, nunca solo el
+  // gating de la UI. Se comprueba por operación (un mismo push puede
+  // traer una mezcla de entityTypes) y ANTES de tocar la base: nunca se
+  // registra un intento no autorizado como si fuera un error de datos.
+  if (!canWriteEntity(role, op.entityType)) {
+    logger.warn("Operación de push rechazada por permisos", { entityType: op.entityType, role, operationId: op.id });
+    return {
+      id: op.id,
+      status: "error",
+      error: `No tienes permiso para esta operación (rol: ${role}).`,
+    };
+  }
+
   const existing = await prisma.syncOperation.findUnique({
     where: { operationId: op.id },
   });
@@ -100,6 +118,32 @@ async function processOperation(
       return { id: op.id, status: applied?.status === "applied" ? "duplicate" : "error" };
     }
 
+    // Fase 7 (§"Hardening de sincronización"): dos solicitudes
+    // concurrentes para el MISMO operationId (nunca dos operationIds
+    // distintos, ver más abajo) pueden chocar en la llave primaria de la
+    // propia entidad (p. ej. `mortality_records_pkey`, usando siempre
+    // `op.entityId`) en vez de en `SyncOperation.operationId` —
+    // típicamente cuando el dispositivo reintenta un elemento que quedó
+    // en "syncing" tras abandonar una página a mitad del `push` anterior
+    // (OFFLINE_SYNC.md §14.4): esa solicitud original puede seguir
+    // procesándose en el servidor mientras la página nueva ya reintenta
+    // el mismo operationId. Postgres BLOQUEA la segunda inserción hasta
+    // que la primera transacción termina, y solo entonces lanza la
+    // violación — así que, si llegamos aquí, la transacción que "ganó" ya
+    // TERMINÓ (con éxito o no) antes de que esta lanzara su error. Antes
+    // de aceptar esto como un fallo real, se revisa si esa transacción
+    // ganadora fue precisamente ESTA MISMA operación aplicándose con
+    // éxito — en ese caso es un duplicado inofensivo, nunca un error
+    // genuino (un conflicto real, como un `Pond.code` repetido entre dos
+    // operationIds distintos, nunca deja "applied" para ESTE
+    // operationId, así que sigue cayendo al camino de error normal).
+    const concurrentWinner = await prisma.syncOperation.findUnique({
+      where: { operationId: op.id },
+    });
+    if (concurrentWinner?.status === "applied") {
+      return { id: op.id, status: "duplicate" };
+    }
+
     const message = error instanceof Error ? error.message : "Error desconocido";
 
     // Se registra el intento fallido para diagnóstico (fuera de la
@@ -127,6 +171,16 @@ async function processOperation(
 }
 
 export async function POST(request: Request) {
+  // Autenticación obligatoria (§"Protección de API y rutas" del encargo
+  // de Fase 7): sin un token válido, el push entero se rechaza antes de
+  // tocar cualquier dato — nunca se procesa una operación "a medias" sin
+  // saber quién la envía. El cliente conserva el dato en su outbox local
+  // (nunca se pierde) y lo reintenta tras un login exitoso.
+  const auth = await authenticateRequest(request);
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
   let json: unknown;
   try {
     json = await request.json();
@@ -147,7 +201,7 @@ export async function POST(request: Request) {
   // orden de aplicación debe respetar el orden de envío del dispositivo.
   const results: OperationResult[] = [];
   for (const op of parsed.data.operations) {
-    results.push(await processOperation(op));
+    results.push(await processOperation(op, auth.user.role));
   }
 
   return NextResponse.json({ results, serverTime: new Date().toISOString() });

@@ -12,6 +12,7 @@
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/server/prisma";
+import { authenticateRequest } from "@/lib/auth/serverAuth";
 import { pullQuerySchema } from "@/lib/validation/sync";
 import type {
   Customer,
@@ -473,6 +474,15 @@ function serializeSaleLine(line: SaleLine) {
 }
 
 export async function GET(request: Request) {
+  // Lectura permitida a cualquier rol autenticado (incluido "solo
+  // lectura"): los informes offline necesitan el historial completo para
+  // calcular sus KPIs — la restricción de rol nunca aplica a QUÉ se puede
+  // leer, solo a qué se puede escribir (ver push/route.ts).
+  const auth = await authenticateRequest(request);
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
   const url = new URL(request.url);
   const parsed = pullQuerySchema.safeParse({
     since: url.searchParams.get("since"),
