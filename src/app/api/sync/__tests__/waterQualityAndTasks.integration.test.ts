@@ -2,22 +2,29 @@
 // del encargo) contra PostgreSQL real (piscicultura_test), sin mocks.
 import { randomUUID } from "node:crypto";
 
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { prisma } from "@/lib/server/prisma";
+import { authHeader, createTestUser } from "@/test/authTestHelpers";
 import { POST as pushHandler } from "../push/route";
 import { GET as pullHandler } from "../pull/route";
+
+let testToken: string;
+
+beforeAll(async () => {
+  ({ token: testToken } = await createTestUser());
+});
 
 function pushRequest(body: unknown) {
   return new Request("http://localhost/api/sync/push", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...authHeader(testToken) },
     body: JSON.stringify(body),
   });
 }
 
 function pullRequest() {
-  return new Request("http://localhost/api/sync/pull");
+  return new Request("http://localhost/api/sync/pull", { headers: authHeader(testToken) });
 }
 
 function auditFields(deviceId: string) {
