@@ -14,18 +14,22 @@ import { createUserRequestSchema } from "@/lib/validation/auth";
 function serializeUser(user: {
   id: string;
   username: string;
+  email: string | null;
   name: string;
   role: string;
   active: boolean;
+  mustChangePassword: boolean;
   createdAt: Date;
   lastLoginAt: Date | null;
 }) {
   return {
     id: user.id,
     username: user.username,
+    email: user.email,
     name: user.name,
     role: user.role,
     active: user.active,
+    mustChangePassword: user.mustChangePassword,
     createdAt: user.createdAt.toISOString(),
     lastLoginAt: user.lastLoginAt ? user.lastLoginAt.toISOString() : null,
   };
@@ -57,15 +61,21 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  const { username, name, password, role } = parsed.data;
+  const { username, name, email, password, role } = parsed.data;
 
   const existing = await prisma.user.findUnique({ where: { username } });
   if (existing) {
     return NextResponse.json({ error: "Ya existe un usuario con ese nombre." }, { status: 409 });
   }
+  if (email) {
+    const existingEmail = await prisma.user.findUnique({ where: { email } });
+    if (existingEmail) {
+      return NextResponse.json({ error: "Ya existe un usuario con ese correo." }, { status: 409 });
+    }
+  }
 
   const user = await prisma.user.create({
-    data: { username, name, passwordHash: hashPassword(password), role, active: true },
+    data: { username, name, email, passwordHash: hashPassword(password), role, active: true },
   });
 
   logger.info("Usuario creado", { username: user.username, role: user.role, createdBy: auth.user.username });

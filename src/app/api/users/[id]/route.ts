@@ -17,18 +17,22 @@ import { updateUserRequestSchema } from "@/lib/validation/auth";
 function serializeUser(user: {
   id: string;
   username: string;
+  email: string | null;
   name: string;
   role: string;
   active: boolean;
+  mustChangePassword: boolean;
   createdAt: Date;
   lastLoginAt: Date | null;
 }) {
   return {
     id: user.id,
     username: user.username,
+    email: user.email,
     name: user.name,
     role: user.role,
     active: user.active,
+    mustChangePassword: user.mustChangePassword,
     createdAt: user.createdAt.toISOString(),
     lastLoginAt: user.lastLoginAt ? user.lastLoginAt.toISOString() : null,
   };
@@ -60,16 +64,34 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     return NextResponse.json({ error: "Usuario no encontrado." }, { status: 404 });
   }
 
-  const { name, role, active, password, revokeSessions } = parsed.data;
+  const { name, email, role, active, password, revokeSessions } = parsed.data;
+  if (email) {
+    const existingEmail = await prisma.user.findFirst({ where: { email, id: { not: id } } });
+    if (existingEmail) {
+      return NextResponse.json({ error: "Ya existe un usuario con ese correo." }, { status: 409 });
+    }
+  }
   const bumpTokenVersion = Boolean(password) || revokeSessions === true;
 
   const updated = await prisma.user.update({
     where: { id },
     data: {
       ...(name !== undefined ? { name } : {}),
+      ...(email !== undefined ? { email } : {}),
       ...(role !== undefined ? { role } : {}),
       ...(active !== undefined ? { active } : {}),
-      ...(password !== undefined ? { passwordHash: hashPassword(password) } : {}),
+      ...(password !== undefined
+        ? {
+            passwordHash: hashPassword(password),
+            // Restablecer la contraseña de OTRO usuario desde aquí solo
+            // puede hacerlo ADMIN (§"Reset por ADMIN") — nunca es el
+            // propio usuario cambiando su contraseña voluntariamente (eso
+            // es PATCH /api/auth/change-password). Por eso toda contraseña
+            // fijada por esta ruta se trata siempre como temporal: fuerza
+            // el cambio obligatorio en el próximo login online.
+            mustChangePassword: true,
+          }
+        : {}),
       ...(bumpTokenVersion ? { tokenVersion: { increment: 1 } } : {}),
     },
   });
@@ -78,6 +100,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     username: updated.username,
     updatedBy: auth.user.username,
     revokedSessions: bumpTokenVersion,
+    passwordReset: Boolean(password),
   });
 
   return NextResponse.json({ user: serializeUser(updated) });

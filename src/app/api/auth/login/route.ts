@@ -61,7 +61,13 @@ export async function POST(request: Request) {
   const response = NextResponse.json({
     token,
     expiresInSeconds: SESSION_TTL_SECONDS,
-    user: { id: user.id, username: user.username, name: user.name, role: user.role },
+    user: {
+      id: user.id,
+      username: user.username,
+      name: user.name,
+      role: user.role,
+      mustChangePassword: user.mustChangePassword,
+    },
   });
 
   // httpOnly: el cliente no necesita leer esta cookie (usa su propia copia
