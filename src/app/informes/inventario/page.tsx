@@ -12,6 +12,7 @@ import { BarChart } from "@/components/charts/BarChart";
 import { KpiCard } from "@/components/analytics/KpiCard";
 import { CsvExportButton } from "@/components/analytics/CsvExportButton";
 import { PrintButton } from "@/components/analytics/PrintButton";
+import { PrintableReportHeader } from "@/components/analytics/PrintableReportHeader";
 
 export default function InventoryReportPage() {
   const data = useLiveQuery(async () => {
@@ -32,6 +33,7 @@ export default function InventoryReportPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      <PrintableReportHeader title="Inventario" />
       <div className="flex items-center justify-between gap-2">
         <div>
           <Link href="/informes" className="text-sm text-emerald-700 dark:text-emerald-400">

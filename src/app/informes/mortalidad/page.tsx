@@ -15,6 +15,7 @@ import { ReportFilterBar } from "@/components/analytics/ReportFilterBar";
 import { KpiCard } from "@/components/analytics/KpiCard";
 import { CsvExportButton } from "@/components/analytics/CsvExportButton";
 import { PrintButton } from "@/components/analytics/PrintButton";
+import { PrintableReportHeader } from "@/components/analytics/PrintableReportHeader";
 
 function formatDate(iso: string): string {
   return new Intl.DateTimeFormat("es", { dateStyle: "short" }).format(new Date(iso));
@@ -45,6 +46,7 @@ export default function MortalityReportPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      <PrintableReportHeader title="Mortalidad" />
       <div className="flex items-center justify-between gap-2">
         <div>
           <Link href="/informes" className="text-sm text-emerald-700 dark:text-emerald-400">

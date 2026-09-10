@@ -23,6 +23,7 @@ import { BarChart } from "@/components/charts/BarChart";
 import { ReportFilterBar } from "@/components/analytics/ReportFilterBar";
 import { KpiCard } from "@/components/analytics/KpiCard";
 import { PrintButton } from "@/components/analytics/PrintButton";
+import { PrintableReportHeader } from "@/components/analytics/PrintableReportHeader";
 
 const REPORT_LINKS = [
   { href: "/informes/produccion", label: "Producción", icon: "📈" },
@@ -157,6 +158,7 @@ export default function AnalyticsDashboardPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      <PrintableReportHeader title="Panel de informes" />
       <div className="flex items-center justify-between gap-2">
         <div>
           <h2 className="text-base font-semibold text-zinc-700 dark:text-zinc-300">

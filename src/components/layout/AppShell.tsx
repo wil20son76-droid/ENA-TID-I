@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { Logo } from "@/components/brand/Logo";
 import { SyncStatusBadge } from "@/components/sync/SyncStatusBadge";
 import { useSessionContext } from "@/lib/auth/SessionContext";
 import { hasCapability, ROLE_LABEL } from "@/lib/auth/permissions";
@@ -78,7 +79,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] backdrop-blur print:hidden dark:border-zinc-800 dark:bg-zinc-950/95">
         <div className="mx-auto flex max-w-3xl flex-col gap-2">
           <div className="flex items-center justify-between gap-2">
-            <h1 className="text-lg font-semibold">Mi Piscicultura</h1>
+            <div className="flex min-w-0 items-center gap-2">
+              <Logo className="h-8 w-auto flex-shrink-0" />
+              <h1 className="truncate text-lg font-semibold">Mi Piscicultura</h1>
+            </div>
             <div className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
               <span>
                 {session.name} · {ROLE_LABEL[session.role]}
