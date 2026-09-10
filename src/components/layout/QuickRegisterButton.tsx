@@ -33,7 +33,7 @@ export function QuickRegisterButton() {
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="fixed bottom-20 right-4 z-20 flex flex-col items-end gap-2">
+    <div className="fixed bottom-20 right-4 z-20 flex flex-col items-end gap-2 print:hidden">
       {open && (
         <div className="flex flex-col gap-1 rounded-xl border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
           {OPTIONS.map((option) => (

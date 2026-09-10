@@ -16,6 +16,7 @@ const NAV_ITEMS = [
   { href: "/calidad-agua", label: "Agua", icon: "💧" },
   { href: "/tareas", label: "Tareas", icon: "✅" },
   { href: "/economia", label: "Economía", icon: "💰" },
+  { href: "/informes", label: "Informes", icon: "📊" },
 ] as const;
 
 function isActive(pathname: string, href: string): boolean {
@@ -57,19 +58,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex min-h-screen flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
-      <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 px-4 py-3 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95">
+      <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 px-4 py-3 backdrop-blur print:hidden dark:border-zinc-800 dark:bg-zinc-950/95">
         <div className="mx-auto flex max-w-3xl flex-col gap-2">
           <h1 className="text-lg font-semibold">Mi Piscicultura</h1>
           <SyncStatusBadge />
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-3xl flex-1 px-4 pb-24 pt-4">{children}</main>
+      <main className="mx-auto w-full max-w-3xl flex-1 px-4 pb-24 pt-4 print:pb-0 print:pt-0">{children}</main>
 
       <QuickRegisterButton />
 
       <nav
-        className="fixed inset-x-0 bottom-0 z-10 border-t border-zinc-200 bg-white/95 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95"
+        className="fixed inset-x-0 bottom-0 z-10 border-t border-zinc-200 bg-white/95 backdrop-blur print:hidden dark:border-zinc-800 dark:bg-zinc-950/95"
         aria-label="Navegación principal"
       >
         <div className="mx-auto flex max-w-3xl">
