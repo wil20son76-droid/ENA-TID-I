@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
 
+import { RequireCapability } from "@/components/auth/RequireCapability";
 import { db } from "@/lib/db/schema";
 import { listActiveCustomers } from "@/lib/db/repositories/customerRepository";
 import { getAvailableKgForHarvest, registerSale } from "@/lib/db/repositories/saleRepository";
@@ -90,6 +91,7 @@ export default function NewSalePage() {
   }
 
   return (
+    <RequireCapability capability="MANAGE_ECONOMY">
     <div className="flex flex-col gap-6">
       <h2 className="text-base font-semibold text-zinc-700 dark:text-zinc-300">Nueva venta</h2>
 
@@ -236,5 +238,6 @@ export default function NewSalePage() {
         </button>
       </form>
     </div>
+    </RequireCapability>
   );
 }

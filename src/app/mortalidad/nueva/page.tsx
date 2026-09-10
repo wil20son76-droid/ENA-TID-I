@@ -4,6 +4,7 @@ import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
 
+import { RequireCapability } from "@/components/auth/RequireCapability";
 import type { MortalityCause } from "@/lib/db/types";
 import { MORTALITY_CAUSE_LABEL } from "@/lib/labels";
 import { db } from "@/lib/db/schema";
@@ -201,8 +202,10 @@ function NewMortalityForm() {
 
 export default function NewMortalityPage() {
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-500">Cargando…</p>}>
-      <NewMortalityForm />
-    </Suspense>
+    <RequireCapability capability="FIELD_OPS">
+      <Suspense fallback={<p className="text-sm text-zinc-500">Cargando…</p>}>
+        <NewMortalityForm />
+      </Suspense>
+    </RequireCapability>
   );
 }

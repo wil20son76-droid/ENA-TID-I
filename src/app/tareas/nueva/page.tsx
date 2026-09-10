@@ -4,6 +4,7 @@ import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
 
+import { RequireCapability } from "@/components/auth/RequireCapability";
 import type { TaskPriority } from "@/lib/db/types";
 import { TASK_PRIORITY_LABEL } from "@/lib/labels";
 import { db } from "@/lib/db/schema";
@@ -194,8 +195,10 @@ function NewTaskForm() {
 
 export default function NewTaskPage() {
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-500">Cargando…</p>}>
-      <NewTaskForm />
-    </Suspense>
+    <RequireCapability capability="FIELD_OPS">
+      <Suspense fallback={<p className="text-sm text-zinc-500">Cargando…</p>}>
+        <NewTaskForm />
+      </Suspense>
+    </RequireCapability>
   );
 }

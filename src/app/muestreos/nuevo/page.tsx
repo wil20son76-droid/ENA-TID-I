@@ -4,6 +4,7 @@ import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
 
+import { RequireCapability } from "@/components/auth/RequireCapability";
 import { formatG } from "@/lib/domain/format";
 import { calculateSampleAverageWeightG } from "@/lib/domain/sampling";
 import { db } from "@/lib/db/schema";
@@ -221,8 +222,10 @@ function NewSamplingForm() {
 
 export default function NewSamplingPage() {
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-500">Cargando…</p>}>
-      <NewSamplingForm />
-    </Suspense>
+    <RequireCapability capability="FIELD_OPS">
+      <Suspense fallback={<p className="text-sm text-zinc-500">Cargando…</p>}>
+        <NewSamplingForm />
+      </Suspense>
+    </RequireCapability>
   );
 }

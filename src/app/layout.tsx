@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
 import { AppShell } from "@/components/layout/AppShell";
+import { AuthGate } from "@/components/auth/AuthGate";
 import { InstallPrompt } from "@/components/pwa/InstallPrompt";
 import { ServiceWorkerRegister } from "@/components/pwa/ServiceWorkerRegister";
 import { SyncProvider } from "@/components/sync/SyncProvider";
@@ -41,10 +42,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full">
         <ServiceWorkerRegister />
-        <SyncProvider>
-          <AppShell>{children}</AppShell>
-        </SyncProvider>
-        <InstallPrompt />
+        <AuthGate>
+          <SyncProvider>
+            <AppShell>{children}</AppShell>
+          </SyncProvider>
+          <InstallPrompt />
+        </AuthGate>
       </body>
     </html>
   );

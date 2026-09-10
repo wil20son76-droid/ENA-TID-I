@@ -4,6 +4,7 @@ import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
 
+import { RequireCapability } from "@/components/auth/RequireCapability";
 import type { HarvestType } from "@/lib/db/types";
 import { db } from "@/lib/db/schema";
 import { getPondOccupancy } from "@/lib/db/repositories/ledgerQueries";
@@ -254,8 +255,10 @@ function NewHarvestForm() {
 
 export default function NewHarvestPage() {
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-500">Cargando…</p>}>
-      <NewHarvestForm />
-    </Suspense>
+    <RequireCapability capability="MANAGE_ECONOMY">
+      <Suspense fallback={<p className="text-sm text-zinc-500">Cargando…</p>}>
+        <NewHarvestForm />
+      </Suspense>
+    </RequireCapability>
   );
 }

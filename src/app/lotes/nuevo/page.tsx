@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
 
+import { RequireCapability } from "@/components/auth/RequireCapability";
 import { calculateBiomassKg } from "@/lib/domain/biomass";
 import { db } from "@/lib/db/schema";
 import { createFishBatchWithStocking } from "@/lib/db/repositories/fishBatchRepository";
@@ -75,6 +76,7 @@ export default function NewFishBatchPage() {
   }
 
   return (
+    <RequireCapability capability="MANAGE_CATALOG">
     <div className="flex flex-col gap-6">
       <h2 className="text-base font-semibold text-zinc-700 dark:text-zinc-300">Nuevo lote</h2>
 
@@ -199,5 +201,6 @@ export default function NewFishBatchPage() {
         </button>
       </form>
     </div>
+    </RequireCapability>
   );
 }

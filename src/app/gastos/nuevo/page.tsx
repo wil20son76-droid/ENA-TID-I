@@ -4,6 +4,7 @@ import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
 
+import { RequireCapability } from "@/components/auth/RequireCapability";
 import type { ExpenseCategory } from "@/lib/db/types";
 import { db } from "@/lib/db/schema";
 import { createExpense } from "@/lib/db/repositories/expenseRepository";
@@ -232,8 +233,10 @@ function NewExpenseForm() {
 
 export default function NewExpensePage() {
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-500">Cargando…</p>}>
-      <NewExpenseForm />
-    </Suspense>
+    <RequireCapability capability="MANAGE_ECONOMY">
+      <Suspense fallback={<p className="text-sm text-zinc-500">Cargando…</p>}>
+        <NewExpenseForm />
+      </Suspense>
+    </RequireCapability>
   );
 }

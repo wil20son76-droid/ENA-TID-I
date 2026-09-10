@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
 
+import { RequireCapability } from "@/components/auth/RequireCapability";
 import type { PurchaseItemType } from "@/lib/db/types";
 import { db } from "@/lib/db/schema";
 import { registerPurchase } from "@/lib/db/repositories/purchaseRepository";
@@ -129,6 +130,7 @@ export default function NewPurchasePage() {
   }
 
   return (
+    <RequireCapability capability="MANAGE_ECONOMY">
     <div className="flex flex-col gap-6">
       <h2 className="text-base font-semibold text-zinc-700 dark:text-zinc-300">Nueva compra</h2>
 
@@ -375,5 +377,6 @@ export default function NewPurchasePage() {
         </button>
       </form>
     </div>
+    </RequireCapability>
   );
 }

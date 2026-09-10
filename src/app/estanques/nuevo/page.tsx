@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { RequireCapability } from "@/components/auth/RequireCapability";
 import { PondGeometryFields } from "@/components/ponds/PondGeometryFields";
 import { createPond } from "@/lib/db/repositories/pondRepository";
 import { applyPondGeometryPatch, resetToCalculated, type PondGeometryState } from "@/lib/domain/pondGeometry";
@@ -50,6 +51,7 @@ export default function NewPondPage() {
   }
 
   return (
+    <RequireCapability capability="MANAGE_CATALOG">
     <div className="flex flex-col gap-6">
       <div>
         <h2 className="text-base font-semibold text-zinc-700 dark:text-zinc-300">
@@ -103,5 +105,6 @@ export default function NewPondPage() {
         </button>
       </form>
     </div>
+    </RequireCapability>
   );
 }

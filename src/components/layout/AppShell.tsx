@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { SyncStatusBadge } from "@/components/sync/SyncStatusBadge";
+import { useSessionContext } from "@/lib/auth/SessionContext";
+import { hasCapability, ROLE_LABEL } from "@/lib/auth/permissions";
 import { QuickRegisterButton } from "./QuickRegisterButton";
 
 const NAV_ITEMS = [
@@ -18,6 +20,9 @@ const NAV_ITEMS = [
   { href: "/economia", label: "Economía", icon: "💰" },
   { href: "/informes", label: "Informes", icon: "📊" },
 ] as const;
+
+/** Solo ADMIN (capacidad MANAGE_USERS) — nunca se muestra a los demás roles. */
+const ADMIN_NAV_ITEM = { href: "/usuarios", label: "Usuarios", icon: "👤" } as const;
 
 function isActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
@@ -55,12 +60,28 @@ function NavLink({
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { session, logout } = useSessionContext();
+  const navItems = hasCapability(session.role, "MANAGE_USERS") ? [...NAV_ITEMS, ADMIN_NAV_ITEM] : NAV_ITEMS;
 
   return (
     <div className="flex min-h-screen flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
       <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 px-4 py-3 backdrop-blur print:hidden dark:border-zinc-800 dark:bg-zinc-950/95">
         <div className="mx-auto flex max-w-3xl flex-col gap-2">
-          <h1 className="text-lg font-semibold">Mi Piscicultura</h1>
+          <div className="flex items-center justify-between gap-2">
+            <h1 className="text-lg font-semibold">Mi Piscicultura</h1>
+            <div className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+              <span>
+                {session.name} · {ROLE_LABEL[session.role]}
+              </span>
+              <button
+                type="button"
+                onClick={logout}
+                className="rounded-full border border-zinc-300 px-2 py-1 font-medium text-zinc-600 transition-colors hover:border-red-400 hover:text-red-600 dark:border-zinc-700 dark:text-zinc-300 dark:hover:text-red-400"
+              >
+                Cerrar sesión
+              </button>
+            </div>
+          </div>
           <SyncStatusBadge />
         </div>
       </header>
@@ -74,7 +95,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         aria-label="Navegación principal"
       >
         <div className="mx-auto flex max-w-3xl">
-          {NAV_ITEMS.map((item) => (
+          {navItems.map((item) => (
             <NavLink
               key={item.href}
               href={item.href}

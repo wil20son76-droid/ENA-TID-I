@@ -4,6 +4,7 @@ import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
 
+import { RequireCapability } from "@/components/auth/RequireCapability";
 import { db } from "@/lib/db/schema";
 import { createWaterQualityRecord } from "@/lib/db/repositories/waterQualityRepository";
 import { getPondOccupancy } from "@/lib/db/repositories/ledgerQueries";
@@ -238,8 +239,10 @@ function NewWaterQualityForm() {
 
 export default function NewWaterQualityPage() {
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-500">Cargando…</p>}>
-      <NewWaterQualityForm />
-    </Suspense>
+    <RequireCapability capability="FIELD_OPS">
+      <Suspense fallback={<p className="text-sm text-zinc-500">Cargando…</p>}>
+        <NewWaterQualityForm />
+      </Suspense>
+    </RequireCapability>
   );
 }

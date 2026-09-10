@@ -4,6 +4,7 @@ import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
 
+import { RequireCapability } from "@/components/auth/RequireCapability";
 import { formatKg } from "@/lib/domain/format";
 import { getFeedStock } from "@/lib/domain/feedLedger";
 import type { FeedingShift } from "@/lib/db/types";
@@ -248,8 +249,10 @@ function NewFeedingForm() {
 
 export default function NewFeedingPage() {
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-500">Cargando…</p>}>
-      <NewFeedingForm />
-    </Suspense>
+    <RequireCapability capability="FIELD_OPS">
+      <Suspense fallback={<p className="text-sm text-zinc-500">Cargando…</p>}>
+        <NewFeedingForm />
+      </Suspense>
+    </RequireCapability>
   );
 }
