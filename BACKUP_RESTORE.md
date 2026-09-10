@@ -23,12 +23,19 @@ refiere exclusivamente a PostgreSQL.
   sin tener que recuperar la base completa) — sin depender de un servicio
   de backup gestionado de terceros, coherente con el criterio de "no
   añadir dependencias externas innecesarias" del proyecto.
-- **Script**: `scripts/backup.sh` (`npm run db:backup`) — vuelca
-  `DATABASE_URL` completo a `backups/piscicultura-<timestamp-UTC>.dump` y
+- **Script**: `scripts/backup.sh` (`npm run db:backup`) — vuelca la base
+  de `DATABASE_URL` a `backups/piscicultura-<timestamp-UTC>.dump` y
   registra el comando exacto de restauración en su propia salida. El
   directorio `backups/` está en `.gitignore`: los dumps **nunca** se
   commitean al repositorio (contienen datos reales de producción,
-  incluidos hashes de contraseña).
+  incluidos hashes de contraseña). **Detalle encontrado ejecutando el
+  script de verdad** (no solo revisándolo): `DATABASE_URL` sigue la
+  convención de este proyecto con `?schema=public` al final — un
+  parámetro que entiende Prisma pero no `pg_dump`/`pg_restore`
+  (`libpq` responde `invalid URI query parameter: "schema"` y aborta).
+  El script ya quita ese parámetro automáticamente antes de invocar
+  `pg_dump`; si restauras a mano con `pg_restore` (§4), quita ese mismo
+  parámetro de `DATABASE_URL` primero.
 - **Dónde correrlo**: contra la `DATABASE_URL` de producción, desde
   cualquier entorno con acceso de red a esa base y `pg_dump` instalado
   (un shell de Railway, un runner de CI programado, o localmente con la
@@ -65,16 +72,22 @@ frecuencia no degrada el servicio en uso normal.
 ```bash
 # 1. Confirmar CONTRA QUÉ base se va a restaurar — nunca ejecutar esto
 #    contra producción sin estar seguro de que es la acción deseada.
-export DATABASE_URL="postgresql://usuario:clave@host:5432/basededatos"
+export DATABASE_URL="postgresql://usuario:clave@host:5432/basededatos?schema=public"
 
-# 2. Restaurar desde un dump (reemplaza el contenido de las tablas
+# 2. pg_restore (como pg_dump, §2) no entiende "?schema=public" —
+#    quitarlo de la URL antes de usarla con herramientas de Postgres,
+#    nunca con Prisma.
+PG_URL="$(printf '%s' "$DATABASE_URL" | sed -E 's/([?&])schema=[^&]*&?/\1/; s/[?&]$//')"
+
+# 3. Restaurar desde un dump (reemplaza el contenido de las tablas
 #    incluidas en el dump; --clean elimina los objetos existentes antes de
 #    recrearlos, --if-exists evita errores si algo ya no existe).
-pg_restore --clean --if-exists --dbname="$DATABASE_URL" backups/piscicultura-<timestamp>.dump
+pg_restore --clean --if-exists --dbname="$PG_URL" backups/piscicultura-<timestamp>.dump
 
-# 3. Verificar que el esquema de Prisma sigue alineado (el dump incluye
+# 4. Verificar que el esquema de Prisma sigue alineado (el dump incluye
 #    la tabla _prisma_migrations, así que "prisma migrate status" refleja
-#    el estado real tras restaurar).
+#    el estado real tras restaurar) — este comando sí usa DATABASE_URL
+#    completo, con "?schema=public": es Prisma, no pg_restore.
 npx prisma migrate status
 ```
 
