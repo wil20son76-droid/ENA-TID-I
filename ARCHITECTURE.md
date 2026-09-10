@@ -1,17 +1,23 @@
 # ARCHITECTURE.md
 
 Este documento describe **cómo está construido lo que ya existe** (Fases
-1, 2, 3, 3.5, 4 y 5). Para la arquitectura objetivo completa del proyecto
-(todas las fases, modelo de datos completo, riesgos) ver [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md).
-Para el detalle específico de offline/sincronización, con diagramas, ver
+1, 2, 3, 3.5, 4, 5, 6 y 7). Para la arquitectura objetivo completa del
+proyecto (todas las fases, modelo de datos completo, riesgos) ver
+[`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md). Para el detalle
+específico de offline/sincronización, con diagramas, ver
 [`OFFLINE_SYNC.md`](./OFFLINE_SYNC.md) — su §8 documenta el modelo de
 lotes/siembras/traslados (Fase 2), su §9 el de alimento/mortalidad/
 muestreos (Fase 3), su §10 el hardening de consistencia de la Fase 3.5
 (comandos de negocio compuestos, orden de sync determinista, recuperación
 de fallos parciales), su §11 calidad del agua, alertas y tareas (Fase 4),
-y su §12 economía y cierre productivo (Fase 5). Para la política
-contable (qué es una compra vs un gasto, costo de inventario de
-alimento, economía de lote), ver [`ECONOMICS.md`](./ECONOMICS.md).
+su §12 economía y cierre productivo (Fase 5), su §13 analítica e informes
+(Fase 6), y su §14 autenticación offline y hardening de sincronización
+(Fase 7). Para la política contable (qué es una compra vs un gasto, costo
+de inventario de alimento, economía de lote), ver
+[`ECONOMICS.md`](./ECONOMICS.md). Para el modelo de seguridad completo
+(roles, JWT, CSP, secretos), ver [`SECURITY.md`](./SECURITY.md); para el
+despliegue en Railway, [`DEPLOYMENT.md`](./DEPLOYMENT.md); para backups,
+[`BACKUP_RESTORE.md`](./BACKUP_RESTORE.md).
 
 ## 1. Visión general
 
@@ -311,6 +317,72 @@ servidor (API routes).
   ninguna validación de balance — `WaterQualityRecord` nunca la
   necesita (§1 del encargo de Fase 4).
 
+### `src/lib/auth/` — autenticación y permisos (Fase 7)
+
+Isomórfico donde tiene sentido (algunas piezas son servidor-only, algunas
+cliente-only, `permissions.ts` es puro y se usa desde ambos lados) — ver
+`SECURITY.md` para el modelo de amenaza completo y `OFFLINE_SYNC.md` §14
+para cómo encaja con el motor de sincronización:
+
+- `password.ts`: `hashPassword`/`verifyPassword` con `scrypt` de
+  `node:crypto` (servidor).
+- `jwt.ts`: `signSessionToken`/`verifySessionToken`, JWT HS256 firmado a
+  mano (servidor). `SESSION_TTL_SECONDS` = 30 días.
+- `permissions.ts`: modelo de capacidades (`Capability`,
+  `ROLE_CAPABILITIES`, `hasCapability`, `ENTITY_CAPABILITY`,
+  `canWriteEntity`) — puro, isomórfico, sin `node:crypto` ni DOM. Es la
+  única fuente de verdad de "qué rol puede escribir qué `entityType`",
+  usada tanto por el servidor (la barrera real) como por la UI (solo para
+  no ofrecer controles que el servidor rechazaría).
+- `serverAuth.ts`: `authenticateRequest`/`requireCapability` (servidor) —
+  verifica el JWT y revalida `active`/`tokenVersion` contra la base en
+  cada request autenticado.
+- `rateLimit.ts`: límite de intentos de login en memoria (servidor).
+- `session.ts`: `getSession`/`setSession`/`clearSession` sobre
+  `localStorage` (cliente) — mismo patrón que `db/deviceId.ts`.
+- `authApi.ts`/`usersApi.ts`: wrappers `fetch` delgados hacia
+  `/api/auth/*` y `/api/users` respectivamente (cliente) — separados de
+  `sync/client.ts` porque `User` nunca pasa por el protocolo de
+  sincronización (§3, más abajo).
+- `SessionContext.tsx`: `SessionProvider`/`useSessionContext` (cliente,
+  `"use client"`) — sesión ya autenticada + `logout()` + renovación
+  silenciosa del token mientras haya conexión.
+
+### `src/components/auth/`
+
+- `AuthGate.tsx`: gate raíz que envuelve toda la app (montado en
+  `layout.tsx`); decide login vs. app leyendo `localStorage`
+  síncronamente (patrón `useSyncExternalStore`, igual que
+  `SyncStatusBadge.tsx`, para evitar `react-hooks/set-state-in-effect` y
+  errores de hidratación) — nunca bloquea por expiración del token
+  (`OFFLINE_SYNC.md` §14.1).
+- `LoginScreen.tsx`: formulario de login, mostrado inline por `AuthGate`
+  (no existe una ruta `/login` separada).
+- `RequireCapability.tsx`: guarda de UI que envuelve páginas/formularios
+  restringidos — solo UX, nunca la barrera real (`SECURITY.md` §3.2).
+
+### `src/app/api/auth/` y `src/app/api/users/` — API de autenticación (Fase 7)
+
+- `auth/login/route.ts`: valida credenciales (rate-limitado por
+  usuario), emite JWT + cookie `httpOnly`, actualiza `lastLoginAt`.
+- `auth/refresh/route.ts`: reemite un JWT fresco a partir de uno todavía
+  válido (nunca renueva uno ya expirado).
+- `health/route.ts`: `GET /api/health`, público, `SELECT 1` contra
+  Postgres — usado por el healthcheck de Railway (`DEPLOYMENT.md` §3).
+- `users/route.ts` + `users/[id]/route.ts`: REST admin-only
+  (`requireCapability("MANAGE_USERS")`) para crear/listar/editar
+  usuarios — **nunca** pasa por `/api/sync/*`: `User` está
+  deliberadamente fuera del protocolo de sincronización offline-first
+  (`schema.prisma`, comentario junto al modelo `User`; `SECURITY.md`
+  §1.2 punto 4).
+
+`middleware.ts` (raíz del proyecto) añade una capa barata delante de
+`/api/sync/*` y `/api/users*`: rechaza sin `Authorization` antes de
+llegar al route handler — nunca sustituye la validación real de
+`authenticateRequest` dentro de cada handler. Las páginas de la app **no**
+se protegen aquí (`AuthGate` es la barrera real de las páginas) — ver
+`SECURITY.md` §5 para la justificación completa.
+
 ### `src/app/` — UI
 
 - `layout.tsx`: shell raíz (español, metadata, `SyncProvider` +
@@ -497,6 +569,20 @@ el de balance (§8.3, §9.4, §12.2), y `WaterQualityRecord`/`Expense`/
 El modelo de datos completo del dominio piscícola queda cubierto con
 la Fase 5 — ver `IMPLEMENTATION_PLAN.md` §4 y `ECONOMICS.md` para la
 política contable.
+
+- **`User`** (Fase 7) — usuario/dispositivo autenticado: `username`
+  único, `name`, `passwordHash` (scrypt), `role` (`UserRole`), `active`,
+  `tokenVersion` (revocación, ver `SECURITY.md` §2), `lastLoginAt`.
+  **Deliberadamente la única entidad del dominio que NO tiene
+  `deviceId`/`version` ni pasa por Dexie/`syncQueue`** — se gestiona
+  exclusivamente online vía `/api/users`, nunca por el protocolo de
+  sincronización offline-first. Ver el comentario extenso junto al
+  modelo en `schema.prisma` y `SECURITY.md` §1.2 (punto 4) para por qué
+  es una decisión de arquitectura deliberada, no una omisión.
+
+`UserRole` (`ADMIN`/`MANAGER`/`WORKER`/`READ_ONLY`) no es una jerarquía
+lineal: es un conjunto de capacidades por rol (`src/lib/auth/permissions.ts`)
+— ver `SECURITY.md` §3.1.
 
 ## 4. Decisiones de arquitectura tomadas durante la Fase 1
 
@@ -770,20 +856,97 @@ para el detalle completo de cada punto.
    encargo, y habría añadido boilerplate de `Suspense` a cada página
    sin beneficio claro.
 
+## 4.7 Decisiones de arquitectura tomadas durante la Fase 7
+
+1. **JWT HS256 firmado a mano con `node:crypto`, no una librería**: mismo
+   criterio de dependencias mínimas que el resto del proyecto (gráficos
+   SVG propios, `window.print()` nativo). No es "reinventar
+   criptografía" — HS256 es el estándar RFC 7519, solo se prescinde del
+   envoltorio de `jose`/`jsonwebtoken` para firmar/verificar tres campos.
+2. **Modelo de capacidades, no jerarquía lineal de roles**: se consideró
+   un modelo "cada rol incluye todo lo del rol de abajo" (más simple de
+   implementar) pero se descartó porque no puede expresar
+   `READ_ONLY` correctamente — un rol de solo lectura no es "menos" que
+   un `WORKER`, es un eje ortogonal (cero capacidades de escritura, no
+   un subconjunto de las de `WORKER`). El modelo de capacidades
+   (`Capability`/`ROLE_CAPABILITIES`) lo expresa sin necesitar un caso
+   especial.
+3. **`User` deliberadamente fuera del protocolo de sync offline-first**:
+   se evaluó tratar `User` como cualquier otra entidad (Dexie +
+   `syncQueue`, mismo mecanismo LWW que `Species`/`Task`) pero se
+   descartó — mezclar una entidad sensible a la seguridad en el mismo
+   modelo eventualmente-consistente que los datos productivos habría
+   permitido que un dispositivo creara localmente un "usuario fantasma"
+   que el servidor nunca autorizó, antes incluso de sincronizar. Se
+   gestiona online-only vía `/api/users`, con el costo aceptado explícito
+   de que crear/editar un usuario exige conexión real (`SECURITY.md` §3.3).
+4. **Revocación por `tokenVersion`, no por lista de tokens revocados
+   (blocklist)**: un entero incremental en `User` es más simple que
+   mantener una tabla de JWTs individualmente revocados, y logra el mismo
+   resultado (todo JWT emitido antes de incrementar el contador deja de
+   validar) sin tener que limpiar esa tabla con el tiempo. La
+   contrapartida aceptada es que revocar invalida *todas* las sesiones de
+   ese usuario a la vez, nunca una sola — suficiente para el caso de uso
+   real ("perdí este dispositivo", "cambié esta contraseña"), y
+   documentado como límite consciente, no accidental.
+5. **CSP con `unsafe-inline` en vez de nonces, tras un experimento
+   fallido real**: se implementó primero la CSP con nonce por solicitud
+   (el patrón recomendado), generada en `middleware.ts` — se revirtió
+   tras confirmar empíricamente (build real + Playwright, no una
+   suposición) que el App Router de Next.js 16/Turbopack no aplica ese
+   nonce a su propio payload RSC inline en este build, dejando la app sin
+   hidratar nunca. Documentado en detalle, con el riesgo residual
+   evaluado explícitamente, en `SECURITY.md` §6 — no es un descuido de
+   seguridad silencioso.
+6. **`middleware.ts` protege solo `/api/sync/*`/`/api/users*`, nunca las
+   páginas**: se evaluó proteger también las rutas de página (`/`,
+   `/especies`...) a nivel de middleware, pero se descartó — esta PWA
+   renderiza su contenido real enteramente en cliente desde IndexedDB; el
+   HTML que Next.js sirve para cualquier ruta es el mismo shell vacío sin
+   datos sensibles. La barrera real de las páginas es `AuthGate`
+   (cliente), que además es la única forma de cumplir el requisito
+   offline-first de esta fase — un middleware de servidor no puede
+   decidir nada sin red.
+7. **Índices de Postgres revisados contra el patrón de consulta real del
+   cursor de `pull`, no añadidos "por si acaso"**: se identificaron
+   primero las tablas sin el índice que su propio patrón de filtro
+   (`updatedAt`/`createdAt` > cursor) necesita, en vez de indexar
+   columnas al azar — ver `OFFLINE_SYNC.md` §14.5-§14.6 para el
+   detalle completo y la verificación contra `EXPLAIN ANALYZE`.
+8. **El hallazgo de operaciones abandonadas en `"syncing"` (§14.4 de
+   `OFFLINE_SYNC.md`) se corrigió en el motor de sync, no con un
+   parche en la UI**: se consideró simplemente ocultar el problema
+   (por ejemplo, no mostrar "Sincronizado" hasta pasado cierto tiempo)
+   pero se descartó — la causa raíz es real y corregible (un estado que
+   solo tiene sentido como "en curso" en la misma sesión de JS que lo
+   creó, nunca como estado persistente entre cargas de página), así que
+   se corrigió ahí: `"syncing"` encontrado al iniciar un ciclo nuevo
+   siempre se trata como abandonado y se reintenta. Encontrado
+   escribiendo la prueba final obligatoria de esta fase (§14.7 de
+   `OFFLINE_SYNC.md`), no en el diseño original — mismo patrón que otros
+   hallazgos reales de fases anteriores (§10.7, §11.1).
+
 ## 5. Qué NO está implementado todavía
 
-Con la Fase 6 se cubre analítica e informes sobre el dominio productivo
-y económico ya existente. Deliberadamente fuera de alcance para la
-Fase 7 (según el encargo de esta fase): IA, sensores IoT,
-multiempresa/multi-finca, seguridad global (autenticación, roles de
-usuario), deployment final, backups, y hardening de producción.
-Deliberadamente fuera de alcance desde la Fase 5 (§76 de su encargo,
-ver `IMPLEMENTATION_PLAN.md` §9): contabilidad fiscal, facturación
-electrónica, impuestos, integración bancaria, nómina, tratamientos/
-medicamentos, diagnóstico de enfermedades, reproducción, un ERP
-completo, notificaciones push, eventos automáticos de producción
-creados desde el calendario, y el aviso interactivo "nueva versión
-disponible" del service worker (por ahora se actualiza solo, sin
+Con la Fase 7 se cubre autenticación, roles básicos, hardening de
+sincronización, seguridad HTTP, backups y preparación de despliegue sobre
+la base productiva/económica/analítica de las fases 2-6. Deliberadamente
+fuera de alcance para la Fase 7 (según el encargo de esta fase): IA,
+sensores IoT, multiempresa/multi-finca, y cualquier funcionalidad de
+negocio nueva más allá de lo ya existente. Deliberadamente fuera de
+alcance dentro de la propia Fase 7 (documentado con su justificación en
+`SECURITY.md` §10): autenticación multi-factor, SSO/OAuth externo,
+auditoría granular por campo, compartimentación de datos por
+estanque/lote asignado a un usuario, rotación automática de
+`AUTH_SECRET`, y rate limiting distribuido (el actual es en memoria de un
+único proceso, documentado como límite aceptado dado que Railway
+despliega una sola instancia web). Deliberadamente fuera de alcance desde
+la Fase 5 (§76 de su encargo, ver `IMPLEMENTATION_PLAN.md` §9):
+contabilidad fiscal, facturación electrónica, impuestos, integración
+bancaria, nómina, tratamientos/medicamentos, diagnóstico de enfermedades,
+reproducción, un ERP completo, notificaciones push, eventos automáticos
+de producción creados desde el calendario, y el aviso interactivo "nueva
+versión disponible" del service worker (por ahora se actualiza solo, sin
 avisar). Ver también `ECONOMICS.md` §12 para las limitaciones
 específicas de la política contable (correcciones/anulaciones,
 `fryCost` vs compra explícita de alevines), y `OFFLINE_SYNC.md` §13.7

@@ -125,10 +125,22 @@ Sobre archivos o *skills* de Prisma 7: en ningún momento se generaron dentro de
 - **Motivo**: 5.9.3 está totalmente soportada por `eslint-config-next` (peer `typescript >= 3.3.1`) y por `typescript-eslint@^8.46.0` (la versión que trae `eslint-config-next@16.3.4`), además de por Prisma 7 y el resto del stack, sin ningún error. No tiene sentido forzar la major más nueva si compromete la estabilidad del lint — mismo principio que la decisión de Prisma. Se reevaluará el salto a TypeScript 7 cuando `typescript-eslint` publique soporte confirmado (hay un issue de seguimiento abierto en su repositorio para ello).
 
 **Regla de actualización futura**: cualquier cambio de versión mayor sobre esta matriz (en particular saltar a Prisma 8 o a una nueva major de Next/React) debe repetir este mismo proceso de verificación (`npm view <pkg> dist-tags`) y quedar documentado aquí antes de aplicarse.
-| Autenticación | NextAuth (Credentials) + sesión local persistida | Login inicial online, uso posterior offline (§48) |
-| Gráficos | Recharts (simple, liviano en móvil) | Suficiente para dashboards de campo |
+| Autenticación | JWT HS256 propio (`node:crypto`) + sesión local persistida — **no** NextAuth, ver nota abajo | Login inicial online, uso posterior offline (§5.6, §48; detalle completo en `SECURITY.md`) |
+| Gráficos | SVG propio (`LineChart`/`BarChart`) — **no** Recharts, ver nota abajo | Suficiente para dashboards de campo, cero dependencia de un CDN externo |
 | Testing | Vitest (unidad/cálculos), Playwright (E2E, incluye modo offline) | Playwright soporta `context.setOffline()` |
 | Hosting | Railway (Web + PostgreSQL) | Requisito explícito, evita Supabase |
+
+> **Nota (implementación real, Fases 6-7)**: esta tabla es el borrador de
+> Fase 0 — dos filas se desviaron del plan original al implementar, por
+> el mismo criterio de "cero dependencias innecesarias" aplicado en el
+> resto del proyecto. **Autenticación**: se implementó un JWT HS256
+> firmado a mano con `node:crypto` en vez de NextAuth (mismo mecanismo
+> de sesión larga + renovación silenciosa que describe §5.6, solo sin la
+> librería) — ver `SECURITY.md` §2 para el diseño exacto. **Gráficos**:
+> se implementaron `LineChart`/`BarChart` en SVG puro en vez de Recharts
+> (`ARCHITECTURE.md` §4.6, punto 3) — evita el riesgo de compatibilidad
+> de una librería de gráficos con React 19/Turbopack y un punto de fallo
+> dependiente de CDN que habría roto el modo offline.
 
 ### 3.3 Por qué esta arquitectura y no otra
 
@@ -512,8 +524,8 @@ IMPLEMENTATION_PLAN.md
 | **3.5 — Hardening de consistencia** ✅ | Sin funcionalidad de negocio nueva: comandos de negocio compuestos atómicos (`RegisterFeeding`, `CreateFeedWithInitialStock`), orden de sync determinista por dependencias explícitas, corrección de recuperación tras fallos parciales, mensajes de conflicto específicos | "Registrar alimentación 18 kg" termina en el servidor en exactamente uno de dos estados — `FeedingRecord`+`FeedInventoryMovement` existen, o ninguno existe — nunca uno sin el otro, ante caída, reintento, respuesta perdida o concurrencia; probado contra PostgreSQL real |
 | **4 — Agua y planificación** ✅ | WaterQualityRecord + alertas por especie, Task, Calendario | Alertas visibles sin diagnosticar enfermedades; tareas offline |
 | **5 — Economía** ✅ | Supplier, Purchase, Expense, Customer, Harvest, Sale, rentabilidad por lote | Flujo cosecha→venta→rentabilidad correcto y trazable |
-| **6 — Analítica** | Dashboard avanzado, gráficos, FCR, informes filtrables | FCR documentado (fuente exacta de datos), "datos insuficientes" cuando corresponda |
-| **7 — Hardening** | Prueba offline obligatoria (§65/§80) end-to-end, resolución de conflictos, rendimiento, seguridad, deploy Railway documentado | Escenario completo de §80 pasa sin pérdida ni duplicación |
+| **6 — Analítica** ✅ | Dashboard avanzado, gráficos, FCR, informes filtrables | FCR documentado (fuente exacta de datos), "datos insuficientes" cuando corresponda |
+| **7 — Hardening** ✅ | Prueba offline obligatoria (§65/§80) end-to-end, resolución de conflictos, rendimiento, seguridad, deploy Railway documentado | Escenario completo de §80 pasa sin pérdida ni duplicación |
 
 Cada fase cierra con: lint → typecheck → tests → build, antes de pasar a la siguiente (§69/§70).
 
@@ -594,6 +606,58 @@ E2E offline completo (compra→cosecha→cliente→venta→gasto, cerrar/
 reabrir sin conexión, reconectar sin duplicados). Detalle completo en
 `OFFLINE_SYNC.md` §12 y `ECONOMICS.md`; decisiones de arquitectura
 específicas de la fase en `ARCHITECTURE.md` §4.5.
+
+**Fase 6 — completada.** Capa `src/lib/analytics/` paralela a `domain/`
+(nunca dentro de ella), sin ninguna tabla Dexie/Prisma nueva: dashboard
+avanzado, ocho informes especializados y comparación por lote/especie,
+todos derivados en caliente de los mismos ledgers de las fases 2-5, con
+razón de sumas (nunca promedio de promedios) en toda agregación entre
+lotes, verificada con los dos ejemplos numéricos obligatorios del encargo
+(supervivencia agregada 86,36 %, precio medio ponderado 29 Bs/kg).
+Gráficos SVG propios y `window.print()` nativo, mismo criterio de cero
+dependencias nuevas que la Fase 4. Escenario E2E 100% offline (dos lotes,
+mortalidad, ventas, exportación CSV, impresión, cerrar/reabrir sin red,
+reconectar y sincronizar dos veces sin duplicar ni cambiar los KPIs).
+Detalle completo en `OFFLINE_SYNC.md` §13; decisiones de arquitectura
+específicas de la fase en `ARCHITECTURE.md` §4.6.
+
+**Fase 7 — completada.** Hardening final y preparación para producción
+real: autenticación (JWT HS256 firmado a mano, `scrypt` para contraseñas),
+cuatro roles básicos por modelo de capacidades (no jerarquía lineal —
+`READ_ONLY` es un eje ortogonal, nunca "menos" que `WORKER`), sesión
+persistente de 30 días que nunca exige red para seguir trabajando offline
+(`AuthGate` nunca bloquea por expiración local; solo el servidor, en el
+próximo intento real de sincronización, valida de verdad — revocación y
+expiración documentadas explícitamente como efectivas solo en ese
+próximo contacto, nunca al instante, en `SECURITY.md` §1). Protección de
+API (`middleware.ts` + `authenticateRequest` en cada handler) y
+validación de permisos por operación dentro de `/api/sync/push`, nunca
+solo en el cliente. Preparación completa para Railway (`railway.json`,
+migraciones automáticas y seguras en cada despliegue vía
+`prisma migrate deploy`, healthcheck en `/api/health`, sin dependencias
+externas adicionales), estrategia de backup de PostgreSQL documentada
+(`BACKUP_RESTORE.md`, con el caso explícito de qué pasa con datos
+todavía no sincronizados en un dispositivo cuando el servidor se
+restaura desde un backup), cabeceras de seguridad HTTP con una CSP cuya
+limitación (`unsafe-inline`) queda documentada con el experimento real
+que la motivó, y revisión completa de índices de PostgreSQL contra el
+patrón de consulta real del cursor de `pull` (`OFFLINE_SYNC.md` §14.5).
+Se encontró y corrigió, escribiendo la prueba final offline obligatoria
+de 20 pasos (`tests/e2e/productionReadiness.spec.ts`), un hallazgo real
+de pérdida silenciosa de datos en el motor de sincronización — una
+operación podía quedar abandonada en estado `"syncing"` para siempre si
+la página navegaba antes de que la respuesta del servidor llegara,
+invisible para todo reintento futuro pero mostrando el badge de
+"Sincronizado" (ver `OFFLINE_SYNC.md` §14.4 para el mecanismo completo y
+la corrección). Ningún test de fases 1-6 se rompió; probado el guion
+completo del encargo (login online, sincronizar, desconectar, cerrar/
+reabrir la PWA offline, registrar las ocho operaciones de campo, cerrar/
+reabrir de nuevo offline, reconectar, sincronizar dos veces) contra
+Postgres real, sin pérdida ni duplicación ni balance negativo. Detalle
+completo en `OFFLINE_SYNC.md` §14; decisiones de arquitectura específicas
+de la fase en `ARCHITECTURE.md` §4.7; modelo de seguridad completo en
+`SECURITY.md`; despliegue en `DEPLOYMENT.md`; backups en
+`BACKUP_RESTORE.md`.
 
 ---
 

@@ -7,30 +7,37 @@ completa y [`ARCHITECTURE.md`](./ARCHITECTURE.md) /
 [`OFFLINE_SYNC.md`](./OFFLINE_SYNC.md) para el detalle técnico del modo
 offline y la sincronización.
 
-Estado actual: **Fase 6 — analítica e informes**. Sobre la base técnica
-offline/sync (Fase 1), el núcleo productivo (Fase 2: Especies,
+Estado actual: **Fase 7 — hardening final y producción**. Sobre la base
+técnica offline/sync (Fase 1), el núcleo productivo (Fase 2: Especies,
 Estanques, Lotes, Siembras, Traslados), la operación diaria (Fase 3:
 alimento, alimentación, mortalidad, muestreos), el hardening de
 consistencia de sincronización (Fase 3.5), calidad del agua/alertas/
-planificación (Fase 4) y economía y cierre productivo (Fase 5:
+planificación (Fase 4), economía y cierre productivo (Fase 5:
 proveedores, clientes, compras, gastos, cosechas, ventas, economía de
-lote — ver [`ECONOMICS.md`](./ECONOMICS.md)), se añadió una capa de
-analítica e informes (`/informes/**`): dashboard avanzado, ocho
-informes especializados (producción, mortalidad, alimentación,
-inventario, calidad del agua, cosechas, ventas y economía),
-comparación por lote/especie, gráficos SVG propios (sin librería),
-exportación CSV y vista imprimible/PDF (`window.print()` nativo) — todo
-calculado en una capa `analytics` pura (nunca en componentes de React),
-100% funcional sin conexión y sin ninguna fuente de verdad nueva: cada
-KPI se deriva de los mismos ledgers de las fases 2-5, con razón de
-sumas (nunca promedio de promedios) en toda agregación entre lotes. Ver
+lote — ver [`ECONOMICS.md`](./ECONOMICS.md)) y analítica e informes
+(Fase 6: dashboard avanzado, ocho informes especializados, comparación
+por lote/especie, exportación CSV y vista imprimible), esta fase añade
+**autenticación, roles y todo lo necesario para un uso real en
+producción**: login con cuatro roles (Administrador/Encargado/
+Trabajador/Solo lectura) sobre un modelo de capacidades — nunca una
+jerarquía lineal —, sesión persistente que **nunca exige red para
+seguir trabajando offline** tras el primer login (regla crítica del
+encargo, ver [`SECURITY.md`](./SECURITY.md)), protección de API y
+validación de permisos en servidor (nunca solo en el cliente),
+preparación completa para Railway con migraciones automáticas en cada
+despliegue (ver [`DEPLOYMENT.md`](./DEPLOYMENT.md)), estrategia de
+backup de PostgreSQL (ver [`BACKUP_RESTORE.md`](./BACKUP_RESTORE.md)),
+cabeceras de seguridad HTTP, revisión de índices de PostgreSQL y un
+hardening real del motor de sincronización (un hallazgo de pérdida
+silenciosa de datos encontrado y corregido durante esta misma fase). Ver
 [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) junto con las
 secciones
 ["Modelo de producción piscícola" (Fase 2)](./OFFLINE_SYNC.md#8-modelo-de-producción-piscícola-fase-2),
 ["Operación diaria" (Fase 3)](./OFFLINE_SYNC.md#9-operación-diaria-alimento-mortalidad-y-muestreos-fase-3),
 ["Calidad del agua, alertas y planificación" (Fase 4)](./OFFLINE_SYNC.md#11-calidad-del-agua-alertas-y-planificación-fase-4),
-["Economía y cierre productivo" (Fase 5)](./OFFLINE_SYNC.md#12-economía-y-cierre-productivo-fase-5)
-y ["Analítica e informes" (Fase 6)](./OFFLINE_SYNC.md#13-analítica-e-informes-fase-6)
+["Economía y cierre productivo" (Fase 5)](./OFFLINE_SYNC.md#12-economía-y-cierre-productivo-fase-5),
+["Analítica e informes" (Fase 6)](./OFFLINE_SYNC.md#13-analítica-e-informes-fase-6)
+y ["Autenticación offline y hardening de sincronización" (Fase 7)](./OFFLINE_SYNC.md#14-autenticación-offline-y-hardening-de-sincronización-fase-7)
 de `OFFLINE_SYNC.md`.
 
 ## Stack
@@ -41,9 +48,10 @@ de `OFFLINE_SYNC.md`.
 | Datos locales | IndexedDB vía Dexie.js |
 | Servidor | API Routes de Next.js, Prisma 7 (driver adapter `@prisma/adapter-pg`) |
 | Base de datos | PostgreSQL |
+| Autenticación | JWT HS256 propio (`node:crypto`) + `scrypt` para contraseñas — sin librería externa |
 | PWA | Manifest nativo de Next.js + service worker propio (`public/sw.js`) |
 | Tests | Vitest (unitarios/integración), Playwright (E2E offline) |
-| Hosting previsto | Railway |
+| Hosting | Railway |
 
 Las versiones exactas y por qué se eligió cada una están documentadas en
 [`IMPLEMENTATION_PLAN.md` §3.3](./IMPLEMENTATION_PLAN.md#33-matriz-de-versiones-verificada-antes-de-instalar).
@@ -70,14 +78,23 @@ npm run db:migrate
 # 4. (Opcional) sembrar datos de demostración: especies, estanques
 #    E01-E04, un lote de ejemplo (PAC-2026-001, 1000 peces en E01) y
 #    tres alimentos con stock inicial. Requiere SEED_DEMO_DATA="true"
-#    en .env; nunca corre en producción por accidente.
+#    en .env; nunca corre en producción por accidente. NUNCA incluye
+#    ningún usuario ni contraseña (ver siguiente paso).
 npm run db:seed
 
-# 5. Levantar el servidor de desarrollo
+# 5. Crear el primer usuario administrador (obligatorio para poder
+#    iniciar sesión — nunca hay un admin sembrado automáticamente).
+ADMIN_USERNAME="admin" ADMIN_NAME="Tu Nombre" ADMIN_PASSWORD="una-clave-fuerte" \
+  npm run auth:create-admin
+
+# 6. Levantar el servidor de desarrollo
 npm run dev
 ```
 
-Abre <http://localhost:3000>.
+Abre <http://localhost:3000> e inicia sesión con el usuario creado en el
+paso 5. Ver [`SECURITY.md`](./SECURITY.md) para el modelo de
+autenticación/roles completo y [`DEPLOYMENT.md`](./DEPLOYMENT.md) para el
+mismo paso en producción.
 
 > **Nota sobre el modo offline en desarrollo**: `next dev` (Turbopack)
 > depende de una conexión WebSocket viva al servidor de desarrollo para
@@ -99,11 +116,14 @@ Abre <http://localhost:3000>.
 | `npm run typecheck` | Comprobación de tipos (`tsc --noEmit`) |
 | `npm run test` | Tests unitarios y de integración (Vitest) |
 | `npm run test:watch` | Vitest en modo watch |
-| `npm run test:e2e` | Tests E2E offline (Playwright; compila y levanta un build de producción automáticamente): escenario base (`tests/e2e/offline.spec.ts`), producción piscícola (`tests/e2e/production.spec.ts`), operación diaria (`tests/e2e/dailyOperations.spec.ts`), calidad del agua + tareas (`tests/e2e/waterQualityAndTasks.spec.ts`), economía y cierre productivo (`tests/e2e/economics.spec.ts`) y analítica e informes (`tests/e2e/analytics.spec.ts`) |
+| `npm run test:e2e` | Tests E2E offline (Playwright; compila y levanta un build de producción automáticamente): escenario base (`tests/e2e/offline.spec.ts`), producción piscícola (`tests/e2e/production.spec.ts`), operación diaria (`tests/e2e/dailyOperations.spec.ts`), calidad del agua + tareas (`tests/e2e/waterQualityAndTasks.spec.ts`), economía y cierre productivo (`tests/e2e/economics.spec.ts`), analítica e informes (`tests/e2e/analytics.spec.ts`), roles y sesión offline (`tests/e2e/auth.spec.ts`) y la prueba final offline obligatoria de Fase 7 (`tests/e2e/productionReadiness.spec.ts`) |
 | `npm run db:migrate` | Aplica migraciones de Prisma (desarrollo) |
 | `npm run db:migrate:deploy` | Aplica migraciones ya creadas (producción/CI) |
 | `npm run db:generate` | Regenera el cliente de Prisma |
 | `npm run db:seed` | Siembra datos de demostración (si `SEED_DEMO_DATA=true`) |
+| `npm run auth:create-admin` | Crea/recupera el usuario `ADMIN` (`ADMIN_USERNAME`/`ADMIN_NAME`/`ADMIN_PASSWORD`, ver [`SECURITY.md`](./SECURITY.md)) |
+| `npm run db:backup` | Backup de PostgreSQL con `pg_dump` (ver [`BACKUP_RESTORE.md`](./BACKUP_RESTORE.md)) |
+| `npm run start:migrate` | `prisma migrate deploy && next start` — comando de arranque en Railway |
 
 ## Variables de entorno
 
@@ -111,10 +131,19 @@ Ver [`.env.example`](./.env.example). Como mínimo:
 
 - `DATABASE_URL`: cadena de conexión a PostgreSQL. En Railway la provee
   automáticamente el plugin de PostgreSQL del proyecto.
-- `SEED_DEMO_DATA`: `"true"` para permitir `npm run db:seed`.
+- `AUTH_SECRET`: **obligatoria**, sin valor por defecto — secreto de
+  firma de las sesiones JWT (mínimo 16 caracteres; en la práctica genera
+  uno largo con `openssl rand -base64 48`). La app se niega a firmar o
+  verificar sesiones sin esto. Ver [`SECURITY.md`](./SECURITY.md) §2/§4.
+- `SEED_DEMO_DATA`: `"true"` para permitir `npm run db:seed` (nunca
+  siembra usuarios ni contraseñas).
+- `ADMIN_USERNAME`/`ADMIN_NAME`/`ADMIN_PASSWORD`: solo para
+  `npm run auth:create-admin` (bootstrap manual del primer admin), nunca
+  se dejan puestas en el entorno de forma permanente.
 
 Nunca subas un `.env` con credenciales reales; `.env.example` es la única
-plantilla versionada.
+plantilla versionada. Nunca hay secretos en el frontend — ver
+[`SECURITY.md`](./SECURITY.md) §4.
 
 ## Base de datos local (IndexedDB) y sincronización
 
@@ -159,7 +188,14 @@ npm run test
 # supervivencia agregada 86,4% y precio medio 29 Bs/kg verificados en la
 # UI real, exportación CSV y botón de impresión sin conexión,
 # cerrar/reabrir sin red y reconectar/sincronizar dos veces sin que los
-# KPIs cambien ni se dupliquen).
+# KPIs cambien ni se dupliquen) + roles y sesión offline (Fase 7: tres
+# dispositivos/roles distintos, revocación de sesión que bloquea el
+# PRÓXIMO sync sin expulsar a nadie de la app offline) + prueba final
+# offline obligatoria (Fase 7: login online, sincronizar, desconectar,
+# cerrar/reabrir la PWA offline, registrar las ocho operaciones de campo
+# —alimentación, mortalidad, muestreo, calidad del agua, tarea, gasto,
+# cosecha, venta—, consultar informes offline, cerrar/reabrir de nuevo,
+# reconectar y sincronizar dos veces sin pérdida ni duplicados).
 npm run test:e2e
 ```
 
@@ -175,25 +211,21 @@ DATABASE_URL="postgresql://.../piscicultura_test?schema=public" npx prisma migra
 
 ## Despliegue en Railway
 
-1. Crea un proyecto en Railway con un plugin de PostgreSQL.
-2. Añade este repositorio como servicio; Railway detecta Next.js
-   automáticamente.
-3. Railway provee `DATABASE_URL` automáticamente al servicio conectado a
-   su PostgreSQL — no hace falta configurarla a mano.
-4. Configura el comando de build para que también aplique migraciones
-   antes de compilar, por ejemplo:
-   ```
-   npm run db:migrate:deploy && npm run build
-   ```
-5. El comando de arranque por defecto (`npm run start`) sirve la app.
-
-No se requiere ningún paso manual adicional en cada despliegue: build y
-migraciones corren automáticamente en el pipeline de Railway.
+`railway.json` ya define build (`npm run build`), arranque
+(`npm run start:migrate` = `prisma migrate deploy && next start`) y
+healthcheck (`GET /api/health`) — **no se requiere ningún paso manual
+adicional en cada despliegue**: build, migraciones y arranque corren
+automáticamente en el pipeline de Railway, sin dependencias externas
+adicionales. Guía completa, paso a paso, con las variables de entorno
+exactas y el bootstrap del primer usuario administrador, en
+[`DEPLOYMENT.md`](./DEPLOYMENT.md).
 
 ## Estructura del proyecto
 
 ```
 prisma/              Esquema, migraciones y seed de Prisma
+scripts/             auth:create-admin (bootstrap del primer admin), db:backup
+middleware.ts        Protección barata de /api/sync/* y /api/users* (Fase 7)
 src/
   app/                Rutas (App Router): páginas y API routes
     estanques/        Listado, alta y ficha de estanque (con pestañas
@@ -218,11 +250,21 @@ src/
                        (producción, mortalidad, alimentación,
                        inventario, calidad del agua, cosechas, ventas,
                        economía) y comparación por lote/especie
+    usuarios/          Alta/listado/desactivación de usuarios y revocación
+                       de sesiones (Fase 7, solo Administrador)
+    api/auth/          login, refresh (Fase 7)
+    api/users/         CRUD admin-only de usuarios — nunca por el
+                       protocolo de sincronización (Fase 7)
+    api/health/        Healthcheck público para Railway (Fase 7)
   components/         Componentes de UI (layout, sync, pwa, estanques)
+    auth/              AuthGate, LoginScreen, RequireCapability (Fase 7)
     charts/           Gráficos SVG propios (línea, barras) — sin librería
     analytics/         Barra de filtros, botones de exportar CSV/imprimir, KpiCard
   hooks/              Hooks de React (estado de sincronización)
   lib/
+    auth/             Autenticación/permisos (Fase 7): password, JWT,
+                       modelo de capacidades, rate limit, sesión de
+                       cliente, contexto de sesión — ver ARCHITECTURE.md
     db/               Capa Dexie/IndexedDB (schema, repositorios)
     domain/           Funciones puras de dominio (ledger de peces y de
                        alimento, biomasa, peso estimado, crecimiento,
@@ -236,7 +278,7 @@ src/
                        filtros, informes por dominio, comparación por
                        lote/especie, exportación CSV — funciones puras,
                        nunca dentro de un componente de React
-    server/           Cliente Prisma (servidor)
+    server/           Cliente Prisma (servidor), logger estructurado
     sync/             Motor de sincronización cliente + protocolo
     validation/       Esquemas Zod compartidos cliente/servidor
     labels.ts         Textos en español de enums de dominio
@@ -244,7 +286,9 @@ src/
 tests/e2e/            Tests Playwright: escenario offline base,
                        producción piscícola, operación diaria,
                        calidad del agua + tareas, economía y cierre
-                       productivo, y analítica e informes
+                       productivo, analítica e informes, roles y sesión
+                       offline, y la prueba final offline obligatoria
+                       (Fase 7)
 ```
 
 ## Documentación
@@ -254,3 +298,6 @@ tests/e2e/            Tests Playwright: escenario offline base,
 - [`OFFLINE_SYNC.md`](./OFFLINE_SYNC.md) — offline y sincronización en detalle, con diagramas.
 - [`ECONOMICS.md`](./ECONOMICS.md) — política contable de la Fase 5: compra vs gasto, costo de inventario de alimento, economía de un lote, márgenes, limitaciones.
 - [`OFFLINE_SYNC.md` §13](./OFFLINE_SYNC.md#13-analítica-e-informes-fase-6) — capa de analítica de la Fase 6: por qué no hay fuentes de verdad nuevas, razón de sumas vs promedio de promedios (con los dos ejemplos obligatorios), filtros de período vs estado, y el escenario offline verificado.
+- [`SECURITY.md`](./SECURITY.md) — modelo de seguridad completo de la Fase 7: autenticación offline y sus limitaciones explícitas, roles/permisos, CSP, secretos, logs, dependencias.
+- [`DEPLOYMENT.md`](./DEPLOYMENT.md) — despliegue en Railway paso a paso: build, arranque, migraciones automáticas, variables de entorno, bootstrap del primer administrador.
+- [`BACKUP_RESTORE.md`](./BACKUP_RESTORE.md) — estrategia de backup de PostgreSQL, frecuencia, restauración, y qué pasa con los datos que un dispositivo todavía no sincronizó.

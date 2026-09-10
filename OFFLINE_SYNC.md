@@ -1,8 +1,10 @@
 # OFFLINE_SYNC.md
 
 Cómo funciona, en detalle, el modo offline-first y la sincronización de
-esta aplicación. Complementa `IMPLEMENTATION_PLAN.md` §5-§6 (el diseño) y
-`ARCHITECTURE.md` (dónde vive cada pieza en el código).
+esta aplicación. Complementa `IMPLEMENTATION_PLAN.md` §5-§6 (el diseño),
+`ARCHITECTURE.md` (dónde vive cada pieza en el código) y, desde la Fase 7,
+`SECURITY.md` (el modelo de amenaza completo de la autenticación offline
+descrita en §14).
 
 ## 1. Escritura offline
 
@@ -1122,3 +1124,265 @@ de esta fase. El informe de economía solo admite filtro de lote/especie
 lo declara explícitamente en la propia página. El resto de los ocho
 informes sí admite los cuatro filtros (fecha, especie, lote y estanque)
 según corresponda a cada dominio.
+
+## 14. Autenticación offline y hardening de sincronización (Fase 7)
+
+Esta fase añade autenticación/roles (ver `SECURITY.md` para el detalle
+completo del modelo de amenaza y sus limitaciones) y endurece el motor de
+sincronización con un hallazgo real de esta misma fase (§14.4). Ninguno
+de los dos cambios toca el principio rector de todo este documento: el
+camino crítico de guardar un dato **nunca** depende de la red.
+
+### 14.1 La sesión nunca bloquea el camino de escritura offline
+
+`AuthGate` (`src/components/auth/AuthGate.tsx`) decide, leyendo
+`localStorage` de forma síncrona y sin ninguna llamada de red, si mostrar
+el login o la app — nunca comprueba si el JWT local ya expiró antes de
+dejar pasar. Una vez dentro, cada repositorio (`createFeedingWithConsumption`,
+`createMortality`, etc.) sigue exactamente el mismo flujo de §1 de este
+documento, sin ninguna referencia a la sesión: la sesión autentica al
+*dispositivo/persona* frente al *servidor*, nunca condiciona si Dexie
+acepta una escritura local. Ver `SECURITY.md` §1 para el diseño completo y
+sus limitaciones de seguridad explícitas (revocación no inmediata,
+expiración no verificada en cliente).
+
+### 14.2 `/api/sync/push` y `/api/sync/pull` ahora exigen un token válido
+
+Único cambio de protocolo de esta fase: ambos endpoints llaman a
+`authenticateRequest` (`src/lib/auth/serverAuth.ts`) al principio de su
+handler — sin un `Authorization: Bearer <token>` válido, responden 401
+antes de tocar cualquier dato. El cliente (`src/lib/sync/client.ts`)
+adjunta el token de `getSession()` en cada llamada y distingue un 401 con
+una excepción propia (`SyncAuthError`) del resto de errores HTTP —
+`engine.ts` la trata igual que cualquier otro fallo del `push` (el dato
+sigue intacto en el outbox local, nunca se pierde) pero además refleja el
+mensaje ("La sesión expiró/fue revocada. Inicia sesión de nuevo para
+sincronizar.") en el estado **global** de sincronización
+(`SyncStatusSnapshot.lastError`), visible en `SyncStatusBadge` — no solo
+marcado por elemento, para que la persona vea de inmediato que necesita
+volver a iniciar sesión, no solo un ícono rojo genérico.
+
+`push/route.ts` además valida, **por operación** dentro del lote (un
+mismo `push` puede traer una mezcla de `entityType`), que el rol del
+usuario autenticado tenga la capacidad requerida
+(`canWriteEntity(role, entityType)`, `src/lib/auth/permissions.ts`) —
+antes de tocar la base de datos. Un rechazo por permisos nunca se
+confunde con un conflicto de datos: es su propio `status: "error"` con un
+mensaje explícito (`"No tienes permiso para esta operación (rol: X)."`).
+`pull/route.ts` no distingue por rol más allá de exigir autenticación —
+cualquier rol puede leer (§3.1 de `SECURITY.md`).
+
+### 14.3 Revocación: solo surte efecto en el próximo intento de sync
+
+`User.tokenVersion` es la única pieza de estado que decide si un JWT ya
+emitido sigue siendo válido. Revocar una sesión (`PATCH /api/users/[id]`
+con `revokeSessions: true`, o un cambio de contraseña) incrementa ese
+contador en la base — el dispositivo revocado **no se entera hasta que
+intenta sincronizar de verdad**: sigue mostrando la app con total
+normalidad, sigue registrando datos localmente, y su outbox sigue
+creciendo. Recién en su siguiente `push`/`pull`, `authenticateRequest`
+compara el `tokenVersion` del JWT contra el valor actual en la base, no
+coincide, y responde 401 (`REVOKED`) — el dato ya registrado localmente
+nunca se pierde, solo queda pendiente hasta que la persona vuelva a
+iniciar sesión (con un login nuevo, que emite un JWT con el
+`tokenVersion` vigente). Verificado en
+`tests/e2e/auth.spec.ts` (prueba 4): revocación confirmada a nivel de
+base de datos, un registro creado *antes* de la revocación sincroniza sin
+problema, uno creado *después* queda pendiente hasta el siguiente login.
+
+### 14.4 Hallazgo real de hardening: operaciones abandonadas en estado "syncing"
+
+Al escribir la prueba final obligatoria (§14.7) se detectó, de forma
+intermitente en la suite E2E completa (no en cada ejecución individual),
+un escenario real de pérdida silenciosa de datos — no relacionado con
+autenticación, sino con el propio motor de sincronización (`engine.ts`),
+que ya existía desde la Fase 1 pero nunca se había ejercitado con la
+secuencia exacta que lo expone:
+
+1. El dispositivo recupera conexión (`context.setOffline(false)` en el
+   test, un evento `online` real del navegador en producción).
+2. El motor de sync arranca automáticamente (`startSyncEngine`'s
+   `runSync()` inicial, o el listener del evento `online`), marca las
+   operaciones pendientes como `"syncing"` (`markSyncing`) y empieza el
+   `fetch()` hacia `/api/sync/push`.
+3. **Antes de que esa respuesta llegue**, la página navega a otra URL (en
+   el test, `page.goto("/")` justo después de reconectar; en producción,
+   la persona toca otra pantalla, o el sistema operativo suspende la PWA
+   en segundo plano) — el contexto de JavaScript que esperaba esa
+   respuesta se destruye. El `fetch()` en camino nunca resuelve ni
+   rechaza: su continuación (`markSynced`/`markError`) simplemente nunca
+   se ejecuta.
+4. Las operaciones quedan en `"syncing"` **para siempre**. Antes de esta
+   corrección, `collectEligibleOperations` solo consultaba los estados
+   `"pending"`/`"error"` — un elemento en `"syncing"` se volvía invisible
+   para todo ciclo de sync futuro, automático o manual. Peor aún: el
+   contador de pendientes (`countPending`, `useSyncStatus`) tampoco los
+   incluía, así que el badge mostraba **"🟢 Sincronizado"** con datos que
+   en realidad nunca llegaron al servidor — el peor tipo de fallo
+   silencioso, porque la interfaz aseguraba justo lo contrario de lo que
+   había ocurrido.
+
+**Corrección** (`src/lib/sync/engine.ts`,
+`src/lib/db/repositories/syncQueueRepository.ts`,
+`src/hooks/useSyncStatus.ts`): un elemento encontrado en `"syncing"` al
+**empezar** un ciclo nuevo de `runSync` nunca puede ser un envío
+realmente en curso — el propio `runSync` se protege con un flag
+`isRunning` contra dos ciclos concurrentes dentro de la misma página
+(comprobado de forma síncrona, sin ninguna ventana de carrera posible),
+así que si `collectEligibleOperations` encuentra un `"syncing"` es,
+necesariamente, el abandono de un intento de una carga de página
+anterior. Ahora se trata igual que `"error"`: siempre elegible para
+reintentarse (sin esperar ningún backoff, ya que no hay forma de saber
+cuándo se abandonó) y se cuenta como pendiente en el badge. Reintentar es
+seguro incluso si el envío original sí había llegado a aplicarse en el
+servidor a pesar de que el cliente nunca vio la respuesta: la idempotencia
+por `operationId` (§5) responde `"duplicate"` sin volver a tocar la base.
+
+```mermaid
+sequenceDiagram
+    participant Page1 as Página (antes de navegar)
+    participant Engine as engine.ts
+    participant API as POST /api/sync/push
+    participant Page2 as Página (después de navegar)
+
+    Note over Page1: evento "online" dispara runSync()
+    Engine->>Engine: markSyncing(batch) — status = "syncing"
+    Engine->>API: fetch() en camino...
+    Note over Page1,Page2: la página navega ANTES de que la<br/>respuesta llegue — el contexto de JS<br/>que esperaba la respuesta se destruye
+    API-->>Page1: (la respuesta llega, pero ya no hay<br/>nadie escuchando: se pierde)
+    Note over Page2: nueva carga, runSync() de nuevo
+    Page2->>Engine: collectEligibleOperations()
+    Note over Engine: ANTES del fix: solo mira pending/error<br/>→ el elemento "syncing" es invisible para<br/>siempre, badge muestra "Sincronizado"
+    Note over Engine: DESPUÉS del fix: "syncing" al empezar<br/>un ciclo es siempre un abandono →<br/>se reintenta, se aplica, se purga
+```
+
+Verificado con una prueba de regresión específica
+(`src/lib/sync/__tests__/engine.test.ts`, "un elemento abandonado en
+'syncing' se reintenta y se sincroniza") que reproduce exactamente este
+estado (un elemento forzado a `"syncing"` antes de invocar `runSync`) y
+confirma que se reintenta, se aplica y se purga del outbox.
+
+**Segundo hallazgo, expuesto por el primer fix**: reintentar un elemento
+en `"syncing"` sin esperar ningún backoff (§14.4, arriba) hace más
+probable un caso límite distinto — que la solicitud ORIGINAL (la que la
+página anterior abandonó) siga procesándose de verdad en el servidor
+justo cuando la página nueva reintenta el mismo `operationId`. Antes de
+esta fase eso era casi imposible de observar (un elemento en `"error"` ya
+esperaba como mínimo 5 segundos de backoff antes de reintentarse, tiempo
+de sobra para que cualquier transacción anterior ya hubiera terminado);
+al volverse "syncing" instantáneamente reintentable, la ventana de
+carrera real se volvió alcanzable en la práctica — se reprodujo primero
+en `tests/e2e/productionReadiness.spec.ts` (paso "18-19. reconectar y
+sincronizar"), con el badge mostrando `"🔴 Error de sincronización"` en
+vez de `"Sincronizado"`.
+
+Concretamente: dos solicitudes HTTP para el **mismo** `operationId`
+llegan realmente en paralelo al servidor. Ambas consultan
+`SyncOperation` y ven `existing == null` (ninguna de las dos transacciones
+ha confirmado todavía), así que ambas intentan `applyOperation` — para
+una entidad *append-only* creada con `entityId` como llave primaria
+(`MortalityRecord`, `Harvest`, etc.), Postgres no rechaza la segunda
+inserción al instante: la **bloquea** hasta que la primera transacción
+termine, y solo entonces, si la primera confirmó, lanza la violación de
+llave primaria a la segunda (`mortality_records_pkey`, `harvests_pkey`,
+según la entidad) — nunca en `sync_operations_operationId_key`, que es lo
+único que el chequeo original (`isUniqueConstraintOnOperationId`,
+`push/route.ts`) sabía reconocer. Antes de esta corrección, esa violación
+caía al camino de error genérico: la operación quedaba marcada
+`"error"` con el mensaje crudo de Postgres, **aunque la operación
+ganadora ya se hubiera aplicado con éxito** — un falso error visible en
+el badge, no una pérdida de datos (la fila sí existe, una sola vez), pero
+sí un incidente que no debía ocurrir.
+
+```mermaid
+sequenceDiagram
+    participant ReqA as Solicitud A (operationId "abc")
+    participant ReqB as Solicitud B (mismo operationId "abc")
+    participant PG as PostgreSQL
+
+    Note over ReqA,ReqB: Ambas ven SyncOperation("abc") == null<br/>(ninguna confirmó todavía)
+    par En paralelo real
+        ReqA->>PG: INSERT mortality_records (id = entityId)
+        ReqB->>PG: INSERT mortality_records (id = entityId)
+    end
+    Note over PG: Postgres BLOQUEA la segunda inserción<br/>hasta que la primera termine
+    PG-->>ReqA: commit — SyncOperation("abc") = "applied"
+    PG-->>ReqB: (ahora sí) unique constraint violation<br/>en mortality_records_pkey, NO en operationId
+    Note over ReqB: ANTES del fix: caía al error genérico -> "error"<br/>DESPUÉS del fix: revisa SyncOperation("abc")<br/>de nuevo -> ya está "applied" -> "duplicate"
+```
+
+**Corrección** (`src/app/api/sync/push/route.ts`): el manejo específico
+para colisiones en `operationId` se generaliza — ante **cualquier** error
+al aplicar una operación (no solo esa colisión concreta), antes de
+marcarla `"error"` se vuelve a consultar `SyncOperation` por ese mismo
+`operationId`. Si ya aparece `"applied"`, la solicitud actual perdió la
+carrera pero la operación sí se aplicó — se responde `"duplicate"`, nunca
+`"error"`. Esto es seguro sin ambigüedad porque el comportamiento de
+bloqueo de Postgres ante una llave primaria duplicada **garantiza** que,
+para cuando la segunda transacción ve el error, la primera ya terminó
+(confirmada o revertida) — nunca hay una ventana donde la fila "podría
+todavía no existir". Un conflicto real y distinto (por ejemplo, dos
+`operationId` distintos creando un `Pond` con el mismo `code`) sigue
+cayendo en el camino de error normal sin cambios: `SyncOperation` para
+ese `operationId` nunca llega a "applied" por otro camino, así que el
+recheck no lo reclasifica.
+
+Verificado con una prueba de integración que fuerza la condición de
+carrera real —no en secuencia— sobre PostgreSQL real: dos invocaciones
+HTTP para el mismo `operationId` lanzadas con `Promise.all`, confirmando
+que el resultado es siempre exactamente un `"applied"` y un `"duplicate"`
+(nunca dos `"error"`, nunca dos filas), con `SyncOperation` terminando en
+`"applied"` (ver `src/app/api/sync/__tests__/sync.integration.test.ts`,
+"dos solicitudes CONCURRENTES con el MISMO operationId nunca terminan en
+'error'..."). Con ambas correcciones aplicadas, la suite E2E completa se
+corrió repetidamente (más de 10 ejecuciones consecutivas de los 58 tests,
+incluidos los escenarios que habían expuesto cada uno de los dos
+hallazgos) sin volver a reproducirse ninguno de los dos.
+
+### 14.5 Índices de PostgreSQL: revisión completa para el cursor de `pull`
+
+Se revisaron los índices de **todas** las tablas sincronizables contra el
+patrón de consulta real de `GET /api/sync/pull` (`WHERE "updatedAt" >
+$since` para entidades mutables, `WHERE "createdAt" > $since` para
+append-only) — antes de esta fase, varias tablas más nuevas (añadidas en
+fases 4-6) no tenían el índice correspondiente, obligando a un escaneo
+completo de tabla en cada `pull` incremental a medida que el histórico
+crece. Se añadió `@@index([updatedAt])` o `@@index([createdAt])` (el que
+corresponda a cada entidad) a las ~19 tablas que lo necesitaban, aplicado
+en la misma migración aditiva `add_authentication` (§7 no requirió una
+migración separada por índices) — ver `DEPLOYMENT.md` §5 para por qué es
+seguro que corra sola en cada despliegue.
+
+### 14.6 Rendimiento: identificar antes de optimizar
+
+Revisión explícita contra datos realistas (no por intuición, per el
+encargo): se pobló la base de pruebas con un dataset de escala razonable
+para una piscicultura activa (varios lotes, cientos de registros diarios
+por tipo) y se midió el plan de ejecución (`EXPLAIN ANALYZE`) del `pull`
+incremental y de las consultas de informes (`/informes/**`) antes y
+después de añadir los índices de §14.5 — la diferencia fue de escaneo
+secuencial a `Index Scan`/`Index Only Scan` para los filtros por cursor,
+sin necesidad de ningún cambio de consulta. Los informes (Fase 6) no se
+tocan en esta fase: siguen derivándose 100% del lado cliente contra Dexie
+(§13.1), así que su rendimiento en un teléfono depende del volumen local
+sincronizado, no de Postgres — ningún hallazgo nuevo aquí, el diseño de
+la Fase 6 ya evitaba este riesgo por construcción.
+
+### 14.7 Prueba final offline obligatoria
+
+`tests/e2e/productionReadiness.spec.ts` reproduce exactamente el guion de
+20 pasos del encargo de esta fase contra un build de producción real y
+Postgres real: login online → sincronizar → desconectar completamente →
+cerrar la PWA → reabrirla offline (sesión persistente, sin pedir login,
+§14.1) → registrar alimentación, mortalidad, muestreo, calidad del agua,
+tarea, gasto, cosecha parcial y venta externa, **todo offline** →
+consultar los informes de producción offline (KPIs correctos sin red) →
+cerrar y reabrir offline de nuevo (todo sigue persistiendo) → recuperar
+Internet → sincronizar → verificar en Postgres que las 8 entidades
+llegaron exactamente una vez cada una, con los balances (peces vivos,
+stock de alimento) coherentes calculados directamente desde columnas
+crudas de Postgres, no desde la respuesta de la API → sincronizar una
+segunda vez y confirmar cero filas nuevas, cero duplicados, cero
+operaciones en estado de error, y los mismos KPIs antes/después del
+segundo sync. `tests/e2e/auth.spec.ts` cubre, por separado, el escenario
+de tres roles en tres dispositivos distintos y la revocación (§14.3).
