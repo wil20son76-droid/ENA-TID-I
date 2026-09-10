@@ -51,7 +51,7 @@ function TaskRow({
       >
         ✓
       </button>
-      <div className="flex flex-1 flex-col gap-0.5">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className={`text-sm ${done ? "text-zinc-400 line-through" : ""}`}>{task.title}</span>
         <span className="text-xs text-zinc-500 dark:text-zinc-400">
           {formatDate(task.dueDate)}

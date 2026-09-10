@@ -97,7 +97,7 @@ function TransferForm({
       className="flex flex-col gap-3 rounded-lg border border-emerald-200 bg-emerald-50/50 p-4 dark:border-emerald-900 dark:bg-emerald-950/30"
     >
       <div className="flex gap-2">
-        <label className="flex flex-1 flex-col gap-1 text-sm">
+        <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
           <span className="text-zinc-600 dark:text-zinc-400">Origen</span>
           <select
             value={fromPondId}
@@ -113,7 +113,7 @@ function TransferForm({
             ))}
           </select>
         </label>
-        <label className="flex flex-1 flex-col gap-1 text-sm">
+        <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
           <span className="text-zinc-600 dark:text-zinc-400">Destino</span>
           <select
             value={toPondId}
@@ -134,7 +134,7 @@ function TransferForm({
       </div>
 
       <div className="flex gap-2">
-        <label className="flex flex-1 flex-col gap-1 text-sm">
+        <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
           <span className="text-zinc-600 dark:text-zinc-400">Cantidad</span>
           <input
             type="number"
@@ -146,7 +146,7 @@ function TransferForm({
             className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-base dark:border-zinc-700 dark:bg-zinc-900"
           />
         </label>
-        <label className="flex flex-1 flex-col gap-1 text-sm">
+        <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
           <span className="text-zinc-600 dark:text-zinc-400">Fecha</span>
           <input
             type="date"
@@ -371,7 +371,7 @@ export default function FishBatchDetailPage({ params }: PageProps<"/lotes/[id]">
             <button
               type="button"
               onClick={() => setShowTransferForm(true)}
-              className="rounded-full border border-emerald-600 px-3 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-400"
+              className="inline-flex min-h-11 items-center justify-center rounded-full border border-emerald-600 px-3 text-xs font-medium text-emerald-700 dark:text-emerald-400"
             >
               Trasladar peces
             </button>
@@ -450,13 +450,13 @@ export default function FishBatchDetailPage({ params }: PageProps<"/lotes/[id]">
         <div className="flex gap-2">
           <Link
             href={`/cosechas/nueva?batchId=${id}`}
-            className="rounded-full border border-emerald-600 px-3 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-400"
+            className="inline-flex min-h-11 items-center justify-center rounded-full border border-emerald-600 px-3 text-xs font-medium text-emerald-700 dark:text-emerald-400"
           >
             + Registrar cosecha
           </Link>
           <Link
             href={`/gastos/nuevo?batchId=${id}`}
-            className="rounded-full border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-300"
+            className="inline-flex min-h-11 items-center justify-center rounded-full border border-zinc-300 px-3 text-xs font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-300"
           >
             + Registrar gasto
           </Link>

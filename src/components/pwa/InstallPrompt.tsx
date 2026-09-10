@@ -34,7 +34,11 @@ export function InstallPrompt() {
   }
 
   return (
-    <div className="fixed inset-x-4 bottom-20 z-20 flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm shadow-lg dark:border-emerald-900 dark:bg-emerald-950">
+    // bottom-40 (no bottom-20, mismo nivel que QuickRegisterButton):
+    // ambos pueden estar visibles a la vez (app sin instalar + sesión
+    // activa) — este aviso se coloca por encima del FAB para que nunca
+    // se superpongan, en vez de competir por el mismo espacio.
+    <div className="fixed inset-x-4 bottom-[calc(10rem+env(safe-area-inset-bottom))] z-20 flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm shadow-lg dark:border-emerald-900 dark:bg-emerald-950">
       <span className="text-emerald-900 dark:text-emerald-100">
         Instala la app para abrirla como una aplicación del teléfono.
       </span>
@@ -42,7 +46,7 @@ export function InstallPrompt() {
         <button
           type="button"
           onClick={() => setDismissed(true)}
-          className="rounded-full px-2 py-1 text-xs text-emerald-700 dark:text-emerald-300"
+          className="inline-flex min-h-11 items-center justify-center rounded-full px-3 text-xs text-emerald-700 dark:text-emerald-300"
         >
           Ahora no
         </button>
@@ -53,7 +57,7 @@ export function InstallPrompt() {
             await deferredPrompt.userChoice;
             setDeferredPrompt(null);
           }}
-          className="rounded-full bg-emerald-700 px-3 py-1 text-xs font-medium text-white"
+          className="inline-flex min-h-11 items-center justify-center rounded-full bg-emerald-700 px-4 text-xs font-medium text-white"
         >
           Instalar
         </button>

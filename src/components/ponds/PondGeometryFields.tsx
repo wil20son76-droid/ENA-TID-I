@@ -15,7 +15,7 @@ interface NumberFieldProps {
 
 function NumberField({ label, value, onChange, suffix }: NumberFieldProps) {
   return (
-    <label className="flex flex-1 flex-col gap-1 text-sm">
+    <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
       <span className="text-zinc-600 dark:text-zinc-400">{label}</span>
       <div className="flex items-center gap-1">
         <input

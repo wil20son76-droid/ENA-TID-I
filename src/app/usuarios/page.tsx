@@ -201,14 +201,14 @@ function UsersAdmin() {
                       <button
                         type="button"
                         onClick={() => void handleToggleActive(user)}
-                        className="rounded-full border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-600 transition-colors hover:border-emerald-600 hover:text-emerald-700 dark:border-zinc-700 dark:text-zinc-300"
+                        className="inline-flex min-h-11 items-center justify-center rounded-full border border-zinc-300 px-3 text-xs font-medium text-zinc-600 transition-colors hover:border-emerald-600 hover:text-emerald-700 dark:border-zinc-700 dark:text-zinc-300"
                       >
                         {user.active ? "Desactivar" : "Activar"}
                       </button>
                       <button
                         type="button"
                         onClick={() => void handleRevoke(user)}
-                        className="rounded-full border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-600 transition-colors hover:border-red-400 hover:text-red-600 dark:border-zinc-700 dark:text-zinc-300"
+                        className="inline-flex min-h-11 items-center justify-center rounded-full border border-zinc-300 px-3 text-xs font-medium text-zinc-600 transition-colors hover:border-red-400 hover:text-red-600 dark:border-zinc-700 dark:text-zinc-300"
                       >
                         Cerrar sesiones
                       </button>

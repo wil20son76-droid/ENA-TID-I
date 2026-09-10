@@ -57,7 +57,7 @@ export function QuickRegisterButton() {
   if (options.length === 0 && !canCreateTask) return null;
 
   return (
-    <div className="fixed bottom-20 right-4 z-20 flex flex-col items-end gap-2 print:hidden">
+    <div className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-[calc(1rem+env(safe-area-inset-right))] z-20 flex flex-col items-end gap-2 print:hidden">
       {open && (
         <div className="flex flex-col gap-1 rounded-xl border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
           {options.map((option) => (

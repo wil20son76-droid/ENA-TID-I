@@ -97,33 +97,33 @@ function OptionalFieldsFieldset({
       </label>
 
       <div className="flex gap-2">
-        <label className="flex flex-1 flex-col gap-1 text-sm">
+        <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
           <span className="text-zinc-600 dark:text-zinc-400">Peso objetivo (kg, opcional)</span>
           <input type="number" inputMode="decimal" step="any" min="0" {...field("targetWeightKg")} />
         </label>
-        <label className="flex flex-1 flex-col gap-1 text-sm">
+        <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
           <span className="text-zinc-600 dark:text-zinc-400">Ciclo estimado (días, opcional)</span>
           <input type="number" inputMode="numeric" min="0" {...field("estimatedCycleDays")} />
         </label>
       </div>
 
       <div className="flex gap-2">
-        <label className="flex flex-1 flex-col gap-1 text-sm">
+        <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
           <span className="text-zinc-600 dark:text-zinc-400">Temp. mínima (°C, opcional)</span>
           <input type="number" inputMode="decimal" step="any" {...field("minTemperatureC")} />
         </label>
-        <label className="flex flex-1 flex-col gap-1 text-sm">
+        <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
           <span className="text-zinc-600 dark:text-zinc-400">Temp. máxima (°C, opcional)</span>
           <input type="number" inputMode="decimal" step="any" {...field("maxTemperatureC")} />
         </label>
       </div>
 
       <div className="flex gap-2">
-        <label className="flex flex-1 flex-col gap-1 text-sm">
+        <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
           <span className="text-zinc-600 dark:text-zinc-400">pH mínimo (opcional)</span>
           <input type="number" inputMode="decimal" step="any" min="0" max="14" {...field("minPh")} />
         </label>
-        <label className="flex flex-1 flex-col gap-1 text-sm">
+        <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
           <span className="text-zinc-600 dark:text-zinc-400">pH máximo (opcional)</span>
           <input type="number" inputMode="decimal" step="any" min="0" max="14" {...field("maxPh")} />
         </label>
@@ -135,11 +135,11 @@ function OptionalFieldsFieldset({
       </label>
 
       <div className="flex gap-2">
-        <label className="flex flex-1 flex-col gap-1 text-sm">
+        <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
           <span className="text-zinc-600 dark:text-zinc-400">FCR esperado (opcional)</span>
           <input type="number" inputMode="decimal" step="any" min="0" {...field("expectedFcr")} />
         </label>
-        <label className="flex flex-1 flex-col gap-1 text-sm">
+        <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
           <span className="text-zinc-600 dark:text-zinc-400">Mortalidad esperada (%, opcional)</span>
           <input
             type="number"
@@ -358,14 +358,14 @@ export default function SpeciesPage() {
                 <button
                   type="button"
                   onClick={() => setEditingId(s.id)}
-                  className="rounded-full border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-600 transition-colors hover:border-emerald-400 hover:text-emerald-700 dark:border-zinc-700 dark:text-zinc-300"
+                  className="inline-flex min-h-11 items-center justify-center rounded-full border border-zinc-300 px-3 text-xs font-medium text-zinc-600 transition-colors hover:border-emerald-400 hover:text-emerald-700 dark:border-zinc-700 dark:text-zinc-300"
                 >
                   Editar
                 </button>
                 <button
                   type="button"
                   onClick={() => void deactivateSpecies(s.id)}
-                  className="rounded-full border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-600 transition-colors hover:border-red-400 hover:text-red-600 dark:border-zinc-700 dark:text-zinc-300"
+                  className="inline-flex min-h-11 items-center justify-center rounded-full border border-zinc-300 px-3 text-xs font-medium text-zinc-600 transition-colors hover:border-red-400 hover:text-red-600 dark:border-zinc-700 dark:text-zinc-300"
                 >
                   Desactivar
                 </button>

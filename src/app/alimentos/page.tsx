@@ -137,7 +137,7 @@ export default function FeedsPage() {
               <button
                 type="button"
                 onClick={() => void deactivateFeed(f.id)}
-                className="shrink-0 rounded-full border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-600 transition-colors hover:border-red-400 hover:text-red-600 dark:border-zinc-700 dark:text-zinc-300"
+                className="inline-flex min-h-11 shrink-0 items-center justify-center rounded-full border border-zinc-300 px-3 text-xs font-medium text-zinc-600 transition-colors hover:border-red-400 hover:text-red-600 dark:border-zinc-700 dark:text-zinc-300"
               >
                 Desactivar
               </button>

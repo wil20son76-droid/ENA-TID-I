@@ -43,7 +43,17 @@ function NavLink({
   return (
     <Link
       href={href}
-      className={`flex flex-1 flex-col items-center gap-0.5 rounded-lg py-2 text-xs font-medium transition-colors ${
+      // min-w fijo (no flex-1) a propósito: con 10-11 accesos, un reparto
+      // proporcional del ancho fuerza cada etiqueta a un espacio menor al
+      // que su texto necesita — el navegador nunca encoge un ítem de flex
+      // por debajo del ancho de su contenido (min-width:auto por
+      // defecto), así que el contenedor entero terminaba más ancho que
+      // el viewport en pantallas de 360-412px (medido: 490px de ancho
+      // real en un viewport de 360px). Un ancho mínimo fijo y cómodo por
+      // ítem, con scroll horizontal CONTENIDO en la propia barra (nunca
+      // en la página — mismo criterio que las tablas de /informes), es
+      // la solución: cada destino sigue a un toque, nunca recortado.
+      className={`flex min-w-[4.5rem] flex-shrink-0 flex-col items-center gap-0.5 rounded-lg px-1 py-2 text-xs font-medium transition-colors ${
         active
           ? "text-emerald-700 dark:text-emerald-400"
           : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
@@ -65,7 +75,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex min-h-screen flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
-      <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 px-4 py-3 backdrop-blur print:hidden dark:border-zinc-800 dark:bg-zinc-950/95">
+      <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] backdrop-blur print:hidden dark:border-zinc-800 dark:bg-zinc-950/95">
         <div className="mx-auto flex max-w-3xl flex-col gap-2">
           <div className="flex items-center justify-between gap-2">
             <h1 className="text-lg font-semibold">Mi Piscicultura</h1>
@@ -76,7 +86,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <button
                 type="button"
                 onClick={logout}
-                className="rounded-full border border-zinc-300 px-2 py-1 font-medium text-zinc-600 transition-colors hover:border-red-400 hover:text-red-600 dark:border-zinc-700 dark:text-zinc-300 dark:hover:text-red-400"
+                className="inline-flex min-h-11 items-center justify-center rounded-full border border-zinc-300 px-3 font-medium text-zinc-600 transition-colors hover:border-red-400 hover:text-red-600 dark:border-zinc-700 dark:text-zinc-300 dark:hover:text-red-400"
               >
                 Cerrar sesión
               </button>
@@ -86,15 +96,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-3xl flex-1 px-4 pb-24 pt-4 print:pb-0 print:pt-0">{children}</main>
+      <main className="mx-auto w-full max-w-3xl flex-1 px-4 pb-[calc(6rem+env(safe-area-inset-bottom))] pt-4 print:pb-0 print:pt-0">
+        {children}
+      </main>
 
       <QuickRegisterButton />
 
       <nav
-        className="fixed inset-x-0 bottom-0 z-10 border-t border-zinc-200 bg-white/95 backdrop-blur print:hidden dark:border-zinc-800 dark:bg-zinc-950/95"
+        className="fixed inset-x-0 bottom-0 z-10 border-t border-zinc-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur print:hidden dark:border-zinc-800 dark:bg-zinc-950/95"
         aria-label="Navegación principal"
       >
-        <div className="mx-auto flex max-w-3xl">
+        <div className="mx-auto flex w-full max-w-3xl overflow-x-auto">
           {navItems.map((item) => (
             <NavLink
               key={item.href}

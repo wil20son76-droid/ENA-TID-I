@@ -127,7 +127,7 @@ export default function NewFishBatchPage() {
         </label>
 
         <div className="flex gap-2">
-          <label className="flex flex-1 flex-col gap-1 text-sm">
+          <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
             <span className="text-zinc-600 dark:text-zinc-400">Cantidad</span>
             <input
               type="number"
@@ -140,7 +140,7 @@ export default function NewFishBatchPage() {
               className="rounded-lg border border-zinc-300 bg-white px-3 py-3 text-base focus:border-emerald-600 focus:outline-none focus:ring-1 focus:ring-emerald-600 dark:border-zinc-700 dark:bg-zinc-900"
             />
           </label>
-          <label className="flex flex-1 flex-col gap-1 text-sm">
+          <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
             <span className="text-zinc-600 dark:text-zinc-400">Peso prom. inicial (g)</span>
             <input
               type="number"

@@ -108,7 +108,7 @@ function NewExpenseForm() {
         </label>
 
         <div className="flex gap-2">
-          <label className="flex flex-1 flex-col gap-1 text-sm">
+          <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
             <span className="text-zinc-600 dark:text-zinc-400">Categoría</span>
             <select
               value={category}
@@ -123,7 +123,7 @@ function NewExpenseForm() {
               ))}
             </select>
           </label>
-          <label className="flex flex-1 flex-col gap-1 text-sm">
+          <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
             <span className="text-zinc-600 dark:text-zinc-400">Importe</span>
             <input
               type="number"
@@ -155,7 +155,7 @@ function NewExpenseForm() {
         </p>
 
         <div className="flex gap-2">
-          <label className="flex flex-1 flex-col gap-1 text-sm">
+          <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
             <span className="text-zinc-600 dark:text-zinc-400">Lote (opcional)</span>
             <select
               value={batchId}
@@ -171,7 +171,7 @@ function NewExpenseForm() {
               ))}
             </select>
           </label>
-          <label className="flex flex-1 flex-col gap-1 text-sm">
+          <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
             <span className="text-zinc-600 dark:text-zinc-400">Estanque (opcional)</span>
             <select
               value={pondId}

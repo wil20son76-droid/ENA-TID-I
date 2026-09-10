@@ -89,7 +89,7 @@ export function SyncStatusBadge() {
         type="button"
         onClick={() => void runSync({ force: true })}
         disabled={buttonDisabled}
-        className="rounded-full border border-emerald-600 px-3 py-1 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-emerald-400 dark:hover:bg-emerald-950"
+        className="inline-flex min-h-11 items-center justify-center rounded-full border border-emerald-600 px-3 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-emerald-400 dark:hover:bg-emerald-950"
       >
         Sincronizar ahora
       </button>

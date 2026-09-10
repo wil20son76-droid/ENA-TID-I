@@ -32,6 +32,13 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   themeColor: "#047857",
+  // "cover" (no "auto", el valor por defecto) habilita las variables CSS
+  // env(safe-area-inset-*) — sin esto valen siempre 0 y el header/nav/FAB
+  // fijos podrían quedar bajo el notch o el home indicator de iPhone en
+  // modo standalone (PWA instalada). AppShell/QuickRegisterButton/
+  // InstallPrompt las usan explícitamente — ver ese padding ahí, nunca
+  // aquí, porque cada elemento fijo necesita un valor distinto.
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
