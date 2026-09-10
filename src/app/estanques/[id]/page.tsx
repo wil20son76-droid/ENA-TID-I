@@ -215,6 +215,18 @@ export default function PondDetailPage({ params }: PageProps<"/estanques/[id]">)
         >
           Registrar calidad del agua
         </Link>
+        <Link
+          href={`/cosechas/nueva?pondId=${id}`}
+          className="rounded-lg bg-emerald-700 px-3 py-3 text-center text-sm font-medium text-white transition-colors hover:bg-emerald-800"
+        >
+          Registrar cosecha
+        </Link>
+        <Link
+          href={`/gastos/nuevo?pondId=${id}`}
+          className="rounded-lg border border-emerald-700 px-3 py-3 text-center text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950"
+        >
+          Registrar gasto
+        </Link>
       </div>
 
       <div className="flex gap-1 overflow-x-auto border-b border-zinc-200 dark:border-zinc-800">
@@ -525,6 +537,10 @@ export default function PondDetailPage({ params }: PageProps<"/estanques/[id]">)
                   case "sampling":
                     label = "Muestreo";
                     value = formatG(event.record.averageWeightG);
+                    break;
+                  case "harvest":
+                    label = "Cosecha";
+                    value = `${formatCount(event.record.quantityFish)} peces / ${formatKg(event.record.totalWeightKg)}`;
                     break;
                 }
                 return (

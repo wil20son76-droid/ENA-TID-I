@@ -6,6 +6,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { getBatchProductionSummary } from "@/lib/domain/productionSummary";
 import { getAllFeedStocks } from "@/lib/domain/feedLedger";
 import { formatCount, formatKg } from "@/lib/domain/format";
+import { formatMoney } from "@/lib/domain/money";
 import { evaluateWaterQuality, getLatestMeasurement, isMeasurementStale } from "@/lib/domain/waterQuality";
 import { classifyTask } from "@/lib/domain/task";
 import { getPondOccupancy } from "@/lib/db/repositories/ledgerQueries";
@@ -54,12 +55,16 @@ export default function DashboardPage() {
       stockings,
       transfers,
       mortalities,
+      harvests,
       samplings,
       feedings,
       feeds,
       movements,
       waterQualityRecords,
       tasks,
+      sales,
+      saleLines,
+      expenses,
     ] = await Promise.all([
       db.species.toArray(),
       db.ponds.toArray(),
@@ -67,12 +72,16 @@ export default function DashboardPage() {
       db.stockings.toArray(),
       db.fishTransfers.toArray(),
       db.mortalityRecords.toArray(),
+      db.harvests.toArray(),
       db.samplings.toArray(),
       db.feedingRecords.toArray(),
       db.feeds.toArray(),
       db.feedInventoryMovements.toArray(),
       db.waterQualityRecords.toArray(),
       db.tasks.toArray(),
+      db.sales.toArray(),
+      db.saleLines.toArray(),
+      db.expenses.toArray(),
     ]);
 
     const activeBatches = batches.filter((b) => !b.deletedAt);
@@ -83,6 +92,12 @@ export default function DashboardPage() {
         stockings,
         transfers,
         mortalities,
+        harvests.map((h) => ({
+          batchId: h.batchId,
+          pondId: h.pondId,
+          quantityFish: h.quantityFish,
+          totalWeightKg: h.totalWeightKg,
+        })),
         samplings,
         batch.id,
         batch.initialAverageWeightG,
@@ -162,6 +177,38 @@ export default function DashboardPage() {
       else if (bucket === "upcoming") tasksUpcoming += 1;
     }
 
+    // Fase 5 (§47): resumen económico mínimo en el dashboard, sin saturar
+    // la operación diaria — ventas/gastos directos del mes, pagos
+    // pendientes y cosecha reciente.
+    const activeHarvests = harvests.filter((h) => !h.deletedAt);
+    const harvestedKgThisMonth = activeHarvests
+      .filter((h) => isSameMonth(h.date, today))
+      .reduce((sum, h) => sum + h.totalWeightKg, 0);
+    const lastHarvestDate =
+      activeHarvests.length > 0
+        ? activeHarvests.reduce((latest, h) => (h.date > latest ? h.date : latest), activeHarvests[0].date)
+        : null;
+
+    const activeSales = sales.filter((s) => !s.deletedAt);
+    const salesThisMonth = activeSales.filter((s) => isSameMonth(s.date, today));
+    const saleLinesById = new Map<string, number>();
+    for (const line of saleLines) {
+      if (line.deletedAt) continue;
+      saleLinesById.set(line.saleId, (saleLinesById.get(line.saleId) ?? 0) + line.totalAmount);
+    }
+    const salesThisMonthTotal = salesThisMonth.reduce(
+      (sum, s) => sum + (saleLinesById.get(s.id) ?? s.totalAmount),
+      0,
+    );
+    const pendingPaymentsTotal = activeSales
+      .filter((s) => s.paymentStatus !== "PAID")
+      .reduce((sum, s) => sum + Math.max(0, s.totalAmount - s.amountPaid), 0);
+
+    const activeExpenses = expenses.filter((e) => !e.deletedAt);
+    const directExpensesThisMonth = activeExpenses
+      .filter((e) => isSameMonth(e.date, today) && (e.batchId != null || e.pondId != null))
+      .reduce((sum, e) => sum + e.totalAmount, 0);
+
     return {
       activeSpeciesCount: species.filter((s) => s.active && !s.deletedAt).length,
       activePondsCount: ponds.filter((p) => !p.deletedAt).length,
@@ -180,6 +227,11 @@ export default function DashboardPage() {
       tasksToday,
       tasksOverdue,
       tasksUpcoming,
+      salesThisMonthTotal,
+      directExpensesThisMonth,
+      pendingPaymentsTotal,
+      harvestedKgThisMonth,
+      lastHarvestDate,
     };
   }, []);
 
@@ -199,6 +251,11 @@ export default function DashboardPage() {
   const tasksToday = data?.tasksToday ?? 0;
   const tasksOverdue = data?.tasksOverdue ?? 0;
   const tasksUpcoming = data?.tasksUpcoming ?? 0;
+  const salesThisMonthTotal = data?.salesThisMonthTotal ?? 0;
+  const directExpensesThisMonth = data?.directExpensesThisMonth ?? 0;
+  const pendingPaymentsTotal = data?.pendingPaymentsTotal ?? 0;
+  const harvestedKgThisMonth = data?.harvestedKgThisMonth ?? 0;
+  const lastHarvestDate = data?.lastHarvestDate ?? null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -250,14 +307,35 @@ export default function DashboardPage() {
         <StatCard label="Próximas tareas" value={tasksUpcoming} href="/tareas" />
       )}
 
+      <div className="grid grid-cols-2 gap-3">
+        <StatCard label="Ventas del mes" value={formatMoney(salesThisMonthTotal)} href="/ventas" />
+        <StatCard
+          label="Gastos directos del mes"
+          value={formatMoney(directExpensesThisMonth)}
+          href="/gastos"
+        />
+        <StatCard label="Pagos pendientes" value={formatMoney(pendingPaymentsTotal)} href="/ventas" />
+        <StatCard label="Kg cosechados este mes" value={formatKg(harvestedKgThisMonth)} href="/cosechas" />
+      </div>
+      {lastHarvestDate && (
+        <StatCard
+          label="Última cosecha"
+          value={new Intl.DateTimeFormat("es", { dateStyle: "medium" }).format(new Date(lastHarvestDate))}
+          href="/cosechas"
+        />
+      )}
+
       <StatCard label="Especies" value={activeSpeciesCount} href="/especies" />
 
       <div className="flex flex-col gap-2 rounded-xl border border-dashed border-zinc-300 p-4 text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
         <p>
-          Fase 4: calidad del agua con alertas por especie, tareas y
-          calendario, offline-first, sobre el mismo ledger de peces y
-          alimento de las fases anteriores. Cosechas, ventas y
-          rentabilidad se añaden en las próximas fases.
+          Fase 5: economía y cierre productivo — proveedores, clientes,
+          compras, gastos, cosechas y ventas, offline-first, sobre el mismo
+          ledger de peces y alimento de las fases anteriores. Ver{" "}
+          <Link href="/economia" className="underline">
+            /economia
+          </Link>{" "}
+          para el resumen completo.
         </p>
       </div>
     </div>

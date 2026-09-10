@@ -22,13 +22,14 @@ function formatDate(iso: string): string {
 
 export default function FishBatchesPage() {
   const data = useLiveQuery(async () => {
-    const [batches, species, ponds, stockings, transfers, mortalities] = await Promise.all([
+    const [batches, species, ponds, stockings, transfers, mortalities, harvests] = await Promise.all([
       db.fishBatches.toArray(),
       db.species.toArray(),
       db.ponds.toArray(),
       db.stockings.toArray(),
       db.fishTransfers.toArray(),
       db.mortalityRecords.toArray(),
+      db.harvests.toArray(),
     ]);
     return {
       batches: batches
@@ -39,6 +40,7 @@ export default function FishBatchesPage() {
       stockings,
       transfers,
       mortalities,
+      harvests,
     };
   }, []);
 
@@ -74,6 +76,7 @@ export default function FishBatchesPage() {
             data?.stockings ?? [],
             data?.transfers ?? [],
             data?.mortalities ?? [],
+            data?.harvests ?? [],
             batch.id,
           );
           const locationSummary = Object.entries(distribution)

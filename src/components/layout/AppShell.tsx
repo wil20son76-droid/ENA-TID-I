@@ -15,6 +15,7 @@ const NAV_ITEMS = [
   { href: "/mortalidad", label: "Mortalidad", icon: "💀" },
   { href: "/calidad-agua", label: "Agua", icon: "💧" },
   { href: "/tareas", label: "Tareas", icon: "✅" },
+  { href: "/economia", label: "Economía", icon: "💰" },
 ] as const;
 
 function isActive(pathname: string, href: string): boolean {

@@ -11,10 +11,12 @@ import {
   getBatchProductionSummary,
 } from "@/lib/db/repositories/ledgerQueries";
 import { createFishTransfer } from "@/lib/db/repositories/fishTransferRepository";
+import { getBatchEconomicsSummary } from "@/lib/db/repositories/batchEconomicsRepository";
 import { calculateBiomassKg } from "@/lib/domain/biomass";
 import { calculateFcr } from "@/lib/domain/fcr";
 import { calculateGrowth } from "@/lib/domain/growth";
 import { formatCount, formatG, formatKg, formatPercent } from "@/lib/domain/format";
+import { formatMoney } from "@/lib/domain/money";
 import { MORTALITY_CAUSE_LABEL } from "@/lib/labels";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -243,6 +245,7 @@ export default function FishBatchDetailPage({ params }: PageProps<"/lotes/[id]">
     () => db.samplings.where("batchId").equals(id).toArray(),
     [id],
   ) ?? [];
+  const economics = useLiveQuery(() => getBatchEconomicsSummary(id), [id]);
 
   const [showTransferForm, setShowTransferForm] = useState(false);
 
@@ -406,6 +409,61 @@ export default function FishBatchDetailPage({ params }: PageProps<"/lotes/[id]">
       </section>
 
       <section className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Economía</h3>
+          {economics?.isProvisional && (
+            <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+              Rentabilidad provisional
+            </span>
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-3 rounded-lg border border-zinc-200 bg-white p-4 text-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <span className="text-zinc-500">Costo alevines</span>
+          <span>{economics ? formatMoney(economics.fryCost) : "—"}</span>
+          <span className="text-zinc-500">Costo alimento consumido</span>
+          <span>{economics ? formatMoney(economics.feedCost) : "—"}</span>
+          <span className="text-zinc-500">Gastos directos</span>
+          <span>{economics ? formatMoney(economics.directExpensesTotal) : "—"}</span>
+          <span className="text-zinc-500">Costo directo total</span>
+          <span className="font-medium">{economics ? formatMoney(economics.directCostTotal) : "—"}</span>
+          <span className="text-zinc-500">Kg cosechados</span>
+          <span>{economics ? formatKg(economics.harvestedWeightKgTotal) : "—"}</span>
+          <span className="text-zinc-500">Costo/kg producido</span>
+          <span>{economics?.costPerKg != null ? formatMoney(economics.costPerKg) : "Datos insuficientes"}</span>
+          <span className="text-zinc-500">Ingresos</span>
+          <span>{economics ? formatMoney(economics.incomeTotal) : "—"}</span>
+          <span className="text-zinc-500">Ganancia</span>
+          <span
+            className={`font-medium ${
+              economics && economics.profit < 0 ? "text-red-600 dark:text-red-400" : ""
+            }`}
+          >
+            {economics ? formatMoney(economics.profit) : "—"}
+          </span>
+          <span className="text-zinc-500">Margen</span>
+          <span className="font-medium">
+            {economics?.marginPercent != null
+              ? formatPercent(economics.marginPercent)
+              : "Datos insuficientes"}
+          </span>
+        </div>
+        <div className="flex gap-2">
+          <Link
+            href={`/cosechas/nueva?batchId=${id}`}
+            className="rounded-full border border-emerald-600 px-3 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-400"
+          >
+            + Registrar cosecha
+          </Link>
+          <Link
+            href={`/gastos/nuevo?batchId=${id}`}
+            className="rounded-full border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-300"
+          >
+            + Registrar gasto
+          </Link>
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-2">
         <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Historial</h3>
         <ul className="flex flex-col gap-2 text-sm">
           {history.map((event) => {
@@ -435,6 +493,10 @@ export default function FishBatchDetailPage({ params }: PageProps<"/lotes/[id]">
               case "sampling":
                 label = `Muestreo ${pondById.get(event.record.pondId)?.code ?? ""}`;
                 value = formatG(event.record.averageWeightG);
+                break;
+              case "harvest":
+                label = `Cosecha ${pondById.get(event.record.pondId)?.code ?? ""}`;
+                value = `${formatCount(event.record.quantityFish)} peces / ${formatKg(event.record.totalWeightKg)}`;
                 break;
             }
             return (

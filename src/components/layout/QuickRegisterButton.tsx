@@ -8,6 +8,13 @@ const OPTIONS = [
   { href: "/mortalidad/nueva", label: "Mortalidad", icon: "💀" },
   { href: "/muestreos/nuevo", label: "Muestreo", icon: "📏" },
   { href: "/calidad-agua/nueva", label: "Calidad del agua", icon: "💧" },
+  // Fase 5 (§48 del encargo): cosecha y gasto son registros simples de un
+  // solo evento, igual criterio que el resto de esta lista — compra y
+  // venta NO se agregan aquí porque son de varias líneas/campos y
+  // saturarían este menú rápido (§48: "no forzar compras/ventas
+  // complejas en un menú rápido si empeora la UX").
+  { href: "/cosechas/nueva", label: "Cosecha", icon: "🎣" },
+  { href: "/gastos/nuevo", label: "Gasto", icon: "💸" },
 ] as const;
 
 /** Separado del grupo de registros de producción (§28 del encargo de
