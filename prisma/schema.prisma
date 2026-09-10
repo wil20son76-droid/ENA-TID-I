@@ -5,9 +5,10 @@
 // campos nuevos en Species/Pond. Fase 3 (operación diaria): Feed,
 // FeedInventoryMovement, FeedingRecord, MortalityRecord, Sampling.
 // Fase 4 (calidad del agua, alertas y planificación): WaterQualityRecord,
-// Task. El resto del modelo de datos completo del dominio piscícola está
-// documentado en IMPLEMENTATION_PLAN.md §4 y se implementará de forma
-// incremental en las siguientes fases.
+// Task. Fase 5 (economía y cierre productivo): FarmSettings, Supplier,
+// Customer, Purchase/PurchaseLine, Expense, Harvest, Sale/SaleLine. Ver
+// ECONOMICS.md para la política contable (Purchase vs Expense, costo de
+// inventario de alimento, cómo se evita el doble conteo).
 
 // Prisma 7 requiere el generador "prisma-client" (ESM/CJS configurable) con
 // una ruta de salida explícita, y ya no acepta la URL de conexión dentro de
@@ -103,6 +104,58 @@ enum TaskPriority {
   URGENT
 }
 
+/// Tipo de línea de compra (§8-§9 del encargo de Fase 5). "FEED" es el
+/// único que puede generar un FeedInventoryMovement PURCHASE vinculado.
+enum PurchaseItemType {
+  FEED
+  FRY
+  MEDICINE
+  MATERIAL
+  EQUIPMENT
+  OTHER
+}
+
+/// Categoría de gasto (§17 del encargo). Nunca incluye "compra de
+/// alimento": esa siempre pasa por Purchase (§1 — ver ECONOMICS.md).
+enum ExpenseCategory {
+  FRY
+  FUEL
+  ELECTRICITY
+  LABOR
+  TRANSPORT
+  MAINTENANCE
+  CONSTRUCTION
+  TOOLS
+  EQUIPMENT
+  MEDICINE
+  SERVICES
+  OTHER
+}
+
+/// Tipo de cliente/comprador (§6-§7).
+enum CustomerType {
+  INDIVIDUAL
+  RESTAURANT
+  MARKET
+  DISTRIBUTOR
+  WHOLESALER
+  OTHER
+}
+
+/// Tipo de cosecha (§20): total cierra la producción del lote, parcial no.
+enum HarvestType {
+  PARTIAL
+  TOTAL
+}
+
+/// Estado de pago de una compra o venta (§32 del encargo). Deliberadamente
+/// simple — no es un módulo de cuentas por cobrar/pagar completo (§59, §76).
+enum PaymentStatus {
+  PENDING
+  PARTIAL
+  PAID
+}
+
 enum SyncOperationType {
   CREATE
   UPDATE
@@ -187,6 +240,8 @@ model Pond {
   samplings           Sampling[]
   waterQualityRecords WaterQualityRecord[]
   tasks               Task[]
+  expenses            Expense[]
+  harvests            Harvest[]
 
   @@index([status])
   @@index([active])
@@ -230,6 +285,9 @@ model FishBatch {
   samplings           Sampling[]
   waterQualityRecords WaterQualityRecord[]
   tasks               Task[]
+  expenses            Expense[]
+  harvests            Harvest[]
+  saleLines           SaleLine[]
 
   @@index([speciesId])
   @@index([status])
@@ -317,6 +375,7 @@ model Feed {
 
   inventoryMovements FeedInventoryMovement[]
   feedingRecords     FeedingRecord[]
+  purchaseLines      PurchaseLine[]
 
   @@index([active])
   @@map("feeds")
@@ -513,6 +572,264 @@ model Task {
   @@index([pondId])
   @@index([batchId])
   @@map("tasks")
+}
+
+// --- Fase 5: economía y cierre productivo ---
+
+/// Configuración de moneda de la finca (§2 del encargo de Fase 5):
+/// singleton (siempre `id = "default"`) para no hardcodear "Bs" en cada
+/// función — ver src/lib/domain/money.ts. Mutable con el mismo criterio
+/// last-write-wins que Species/Pond/Feed (LWW por `version`).
+model FarmSettings {
+  id             String @id @default("default")
+  currencyCode   String @default("BOB")
+  currencySymbol String @default("Bs")
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  version   Int       @default(1)
+  deviceId  String
+  createdBy String?
+  updatedBy String?
+
+  @@map("farm_settings")
+}
+
+/// Proveedor (§4-§5 del encargo de Fase 5). Mutable, mismo criterio que
+/// Species/Pond/Feed — sin CRM avanzado, solo datos de contacto básicos.
+model Supplier {
+  id          String  @id @default(uuid())
+  name        String
+  contactName String?
+  phone       String?
+  whatsapp    String?
+  locality    String?
+  address     String?
+  notes       String?
+  active      Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  version   Int       @default(1)
+  deviceId  String
+  createdBy String?
+  updatedBy String?
+
+  purchases Purchase[]
+  expenses  Expense[]
+
+  @@index([active])
+  @@map("suppliers")
+}
+
+/// Cliente/comprador (§6-§7). Mismo criterio que Supplier.
+model Customer {
+  id       String       @id @default(uuid())
+  name     String
+  type     CustomerType @default(INDIVIDUAL)
+  phone    String?
+  whatsapp String?
+  locality String?
+  address  String?
+  notes    String?
+  active   Boolean      @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  version   Int       @default(1)
+  deviceId  String
+  createdBy String?
+  updatedBy String?
+
+  sales Sale[]
+
+  @@index([active])
+  @@map("customers")
+}
+
+/// Compra: cabecera (§8-§13). Se crea SIEMPRE junto a sus líneas — y, si
+/// alguna línea es de alimento, su FeedInventoryMovement PURCHASE — como
+/// una única operación de negocio atómica ("RegisterPurchase", ver
+/// applyOperation.ts): nunca una Purchase sin sus líneas ni inventario sin
+/// su Purchase (§11). Mutable SOLO para el estado de pago (§32, §57): la
+/// UI nunca reedita fecha/proveedor/líneas de una compra ya confirmada
+/// (preferir inmutabilidad tras confirmación simplifica la auditoría).
+model Purchase {
+  id              String        @id @default(uuid())
+  supplierId      String?
+  supplier        Supplier?     @relation(fields: [supplierId], references: [id])
+  date            DateTime
+  referenceNumber String?
+  totalAmount     Decimal       @db.Decimal(12, 2)
+  paymentStatus   PaymentStatus @default(PENDING)
+  amountPaid      Decimal       @default(0) @db.Decimal(12, 2)
+  notes           String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  version   Int       @default(1)
+  deviceId  String
+  createdBy String?
+  updatedBy String?
+
+  lines PurchaseLine[]
+
+  @@index([supplierId])
+  @@index([date])
+  @@map("purchases")
+}
+
+/// Línea de compra (§9): append-only, nunca se edita sola — solo existe
+/// dentro de la Purchase que la creó.
+model PurchaseLine {
+  id          String           @id @default(uuid())
+  purchaseId  String
+  purchase    Purchase         @relation(fields: [purchaseId], references: [id])
+  itemType    PurchaseItemType
+  feedId      String?
+  feed        Feed?            @relation(fields: [feedId], references: [id])
+  description String
+  quantity    Decimal          @db.Decimal(12, 3)
+  unit        String
+  unitPrice   Decimal          @db.Decimal(12, 4)
+  totalAmount Decimal          @db.Decimal(12, 2)
+
+  deviceId  String
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([purchaseId])
+  @@index([feedId])
+  @@map("purchase_lines")
+}
+
+/// Gasto (§17-§19): append-only — nunca se reedita en el sentido de
+/// Species/Pond; una corrección se audita anulando (`deletedAt` +
+/// `voidReason`), nunca borrado físico (§58, §72). Nunca duplica una
+/// compra ya registrada vía Purchase (§1, §17 — ver ECONOMICS.md).
+/// `batchId`/`pondId` opcionales y mutuamente independientes (§18): un
+/// gasto puede ser directo a un lote, directo a un estanque, o general
+/// (ninguno de los dos) — nunca se distribuye un gasto general sin una
+/// política explícita, que esta fase no implementa.
+model Expense {
+  id          String          @id @default(uuid())
+  date        DateTime
+  category    ExpenseCategory
+  description String
+  quantity    Decimal?        @db.Decimal(12, 3)
+  unit        String?
+  unitPrice   Decimal?        @db.Decimal(12, 4)
+  totalAmount Decimal         @db.Decimal(12, 2)
+  supplierId  String?
+  supplier    Supplier?       @relation(fields: [supplierId], references: [id])
+  batchId     String?
+  batch       FishBatch?      @relation(fields: [batchId], references: [id])
+  pondId      String?
+  pond        Pond?           @relation(fields: [pondId], references: [id])
+  notes       String?
+  voidReason  String?
+
+  deviceId  String
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([date])
+  @@index([batchId])
+  @@index([pondId])
+  @@index([supplierId])
+  @@map("expenses")
+}
+
+/// Cosecha (§20-§26): evento append-only, integrado en el ledger de peces
+/// como una salida más (src/lib/domain/batchLedger.ts) — igual criterio
+/// que mortalidad/traslado. `averageWeightG` se calcula antes de guardar
+/// (`totalWeightKg × 1000 / quantityFish`), igual criterio que Sampling.
+model Harvest {
+  id              String      @id @default(uuid())
+  batchId         String
+  batch           FishBatch   @relation(fields: [batchId], references: [id])
+  pondId          String
+  pond            Pond        @relation(fields: [pondId], references: [id])
+  date            DateTime
+  quantityFish    Int
+  totalWeightKg   Decimal     @db.Decimal(12, 3)
+  averageWeightG  Decimal     @db.Decimal(10, 2)
+  harvestType     HarvestType @default(PARTIAL)
+  responsibleName String?
+  notes           String?
+
+  deviceId  String
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  saleLines SaleLine[]
+
+  @@index([batchId])
+  @@index([pondId])
+  @@index([batchId, pondId])
+  @@index([date])
+  @@map("harvests")
+}
+
+/// Venta: cabecera (§27-§32). Mismo criterio de atomicidad que Purchase —
+/// se crea siempre junto a sus líneas como una única operación de negocio
+/// ("RegisterSale", ver applyOperation.ts). Mutable SOLO para el estado de
+/// pago, igual criterio que Purchase (§57).
+model Sale {
+  id            String        @id @default(uuid())
+  customerId    String?
+  customer      Customer?     @relation(fields: [customerId], references: [id])
+  date          DateTime
+  paymentStatus PaymentStatus @default(PENDING)
+  amountPaid    Decimal       @default(0) @db.Decimal(12, 2)
+  totalAmount   Decimal       @db.Decimal(12, 2)
+  notes         String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  version   Int       @default(1)
+  deviceId  String
+  createdBy String?
+  updatedBy String?
+
+  lines SaleLine[]
+
+  @@index([customerId])
+  @@index([date])
+  @@map("sales")
+}
+
+/// Línea de venta (§28-§31): append-only. `harvestId` opcional — si está
+/// presente, esta línea descuenta kg disponibles de esa cosecha (§30-§31,
+/// validado con lock en applyOperation.ts); si no, es una venta externa/no
+/// reconciliada con ninguna cosecha registrada en esta fase.
+model SaleLine {
+  id           String    @id @default(uuid())
+  saleId       String
+  sale         Sale      @relation(fields: [saleId], references: [id])
+  batchId      String
+  batch        FishBatch @relation(fields: [batchId], references: [id])
+  harvestId    String?
+  harvest      Harvest?  @relation(fields: [harvestId], references: [id])
+  description  String
+  quantityFish Int?
+  weightKg     Decimal   @db.Decimal(12, 3)
+  pricePerKg   Decimal   @db.Decimal(12, 4)
+  totalAmount  Decimal   @db.Decimal(12, 2)
+
+  deviceId  String
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([saleId])
+  @@index([batchId])
+  @@index([harvestId])
+  @@map("sale_lines")
 }
 
 /// Registro de operaciones de sincronización procesadas por el servidor.
