@@ -156,6 +156,19 @@ enum PaymentStatus {
   PAID
 }
 
+/// Rol de acceso (Fase 7, §"Roles básicos"). Se mapea a etiquetas en
+/// español vía src/lib/labels.ts, mismo criterio que el resto de los
+/// enums de este esquema. La jerarquía NO es lineal: "READ_ONLY" no es
+/// "menos" que "WORKER", es un eje ortogonal (solo lectura, cero
+/// escritura) — ver src/lib/auth/permissions.ts para el modelo de
+/// capacidades real, que es lo único que decide autorización.
+enum UserRole {
+  ADMIN
+  MANAGER
+  WORKER
+  READ_ONLY
+}
+
 enum SyncOperationType {
   CREATE
   UPDATE
@@ -200,6 +213,7 @@ model Species {
   fishBatches FishBatch[]
 
   @@index([active])
+  @@index([updatedAt])
   @@map("species")
 }
 
@@ -245,6 +259,7 @@ model Pond {
 
   @@index([status])
   @@index([active])
+  @@index([updatedAt])
   @@map("ponds")
 }
 
@@ -291,6 +306,7 @@ model FishBatch {
 
   @@index([speciesId])
   @@index([status])
+  @@index([updatedAt])
   @@map("fish_batches")
 }
 
@@ -318,6 +334,7 @@ model Stocking {
   @@index([batchId])
   @@index([pondId])
   @@index([batchId, pondId])
+  @@index([updatedAt])
   @@map("stockings")
 }
 
@@ -346,6 +363,7 @@ model FishTransfer {
   @@index([batchId])
   @@index([fromPondId])
   @@index([toPondId])
+  @@index([createdAt])
   @@map("fish_transfers")
 }
 
@@ -378,6 +396,7 @@ model Feed {
   purchaseLines      PurchaseLine[]
 
   @@index([active])
+  @@index([updatedAt])
   @@map("feeds")
 }
 
@@ -411,6 +430,7 @@ model FeedInventoryMovement {
   @@index([feedId])
   @@index([feedId, date])
   @@index([movementType])
+  @@index([createdAt])
   @@map("feed_inventory_movements")
 }
 
@@ -440,6 +460,7 @@ model FeedingRecord {
   @@index([pondId])
   @@index([feedId])
   @@index([date])
+  @@index([createdAt])
   @@map("feeding_records")
 }
 
@@ -466,6 +487,7 @@ model MortalityRecord {
   @@index([pondId])
   @@index([batchId, pondId])
   @@index([date])
+  @@index([createdAt])
   @@map("mortality_records")
 }
 
@@ -496,6 +518,7 @@ model Sampling {
   @@index([pondId])
   @@index([batchId, pondId])
   @@index([date])
+  @@index([createdAt])
   @@map("samplings")
 }
 
@@ -534,6 +557,7 @@ model WaterQualityRecord {
   @@index([batchId])
   @@index([pondId, date])
   @@index([date])
+  @@index([createdAt])
   @@map("water_quality_records")
 }
 
@@ -571,6 +595,7 @@ model Task {
   @@index([status])
   @@index([pondId])
   @@index([batchId])
+  @@index([updatedAt])
   @@map("tasks")
 }
 
@@ -621,6 +646,7 @@ model Supplier {
   expenses  Expense[]
 
   @@index([active])
+  @@index([updatedAt])
   @@map("suppliers")
 }
 
@@ -647,6 +673,7 @@ model Customer {
   sales Sale[]
 
   @@index([active])
+  @@index([updatedAt])
   @@map("customers")
 }
 
@@ -680,6 +707,7 @@ model Purchase {
 
   @@index([supplierId])
   @@index([date])
+  @@index([updatedAt])
   @@map("purchases")
 }
 
@@ -704,6 +732,7 @@ model PurchaseLine {
 
   @@index([purchaseId])
   @@index([feedId])
+  @@index([createdAt])
   @@map("purchase_lines")
 }
 
@@ -741,6 +770,7 @@ model Expense {
   @@index([batchId])
   @@index([pondId])
   @@index([supplierId])
+  @@index([createdAt])
   @@map("expenses")
 }
 
@@ -772,6 +802,7 @@ model Harvest {
   @@index([pondId])
   @@index([batchId, pondId])
   @@index([date])
+  @@index([createdAt])
   @@map("harvests")
 }
 
@@ -801,6 +832,7 @@ model Sale {
 
   @@index([customerId])
   @@index([date])
+  @@index([updatedAt])
   @@map("sales")
 }
 
@@ -829,7 +861,46 @@ model SaleLine {
   @@index([saleId])
   @@index([batchId])
   @@index([harvestId])
+  @@index([createdAt])
   @@map("sale_lines")
+}
+
+// --- Fase 7: hardening final y producción ---
+
+/// Cuenta de usuario (Fase 7, §"Autenticación inicial"/§"Roles básicos").
+/// Deliberadamente NO es una entidad offline-first: nunca pasa por
+/// Dexie/syncQueue/SyncOperation — se gestiona siempre en línea, contra
+/// esta tabla directamente, vía /api/users (solo ADMIN). Es un dato de
+/// seguridad, no un dato productivo: tratarlo como el resto del dominio
+/// (créalo offline, sincronízalo después) dejaría un dispositivo con un
+/// usuario "fantasma" que nadie más reconoce hasta la próxima sync — un
+/// riesgo de seguridad, no solo de datos. Ver SECURITY.md.
+///
+/// `tokenVersion` es el mecanismo de revocación (§"Backups"/seguridad):
+/// cada sesión (JWT, ver src/lib/auth/jwt.ts) incluye el `tokenVersion`
+/// vigente en el momento del login. Incrementar este campo (cambio de
+/// contraseña, "cerrar todas las sesiones" desde /usuarios) invalida
+/// TODAS las sesiones emitidas antes de ese momento la próxima vez que
+/// cada dispositivo intente sincronizar — nunca antes, porque un
+/// dispositivo sin conexión no puede saber que fue revocado (limitación
+/// documentada explícitamente en SECURITY.md, es la naturaleza misma de
+/// offline-first: revocar solo surte efecto en el próximo contacto con
+/// el servidor).
+model User {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  name         String
+  passwordHash String
+  role         UserRole
+  active       Boolean  @default(true)
+  tokenVersion Int      @default(1)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  lastLoginAt DateTime?
+
+  @@index([active])
+  @@map("users")
 }
 
 /// Registro de operaciones de sincronización procesadas por el servidor.
