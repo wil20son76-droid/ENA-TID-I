@@ -11,6 +11,10 @@
 import { type Browser, type BrowserContext, type Page, chromium, expect, test } from "@playwright/test";
 import { Client } from "pg";
 
+import { loginViaUi, seedTestUser } from "./helpers/testAuth";
+
+const TEST_USER = { username: "e2e-admin", password: "Test1234!", name: "Encargado E2E", role: "ADMIN" as const };
+
 const TEST_DATABASE_URL =
   process.env.PLAYWRIGHT_DATABASE_URL ??
   (process.env.DATABASE_URL
@@ -57,8 +61,9 @@ test.describe.serial("Escenario offline obligatorio", () => {
       'TRUNCATE "sync_operations", "sale_lines", "sales", "harvests", "expenses", "purchase_lines", ' +
         '"purchases", "customers", "suppliers", "farm_settings", "tasks", "water_quality_records", ' +
         '"feeding_records", "mortality_records", "samplings", ' +
-        '"feed_inventory_movements", "feeds", "fish_transfers", "stockings", "fish_batches", "ponds", "species"',
+        '"feed_inventory_movements", "feeds", "fish_transfers", "stockings", "fish_batches", "ponds", "species", "users"',
     );
+    await seedTestUser(queryDb, TEST_USER);
 
     browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium" });
     context = await browser.newContext({ viewport: { width: 390, height: 844 } });
@@ -73,6 +78,7 @@ test.describe.serial("Escenario offline obligatorio", () => {
   test("1. abrir con conexión y sincronizar una especie creada online", async ({ baseURL }) => {
     await page.goto(`${baseURL}/`, { waitUntil: "networkidle" });
     await waitForServiceWorkerControl(page);
+    await loginViaUi(page, TEST_USER);
 
     // El service worker recién tomó control de esta carga: revisita cada
     // ruta que se necesitará offline más adelante para que quede en su

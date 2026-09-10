@@ -6,6 +6,10 @@
 import { type Browser, type BrowserContext, type Page, chromium, expect, test } from "@playwright/test";
 import { Client } from "pg";
 
+import { loginViaUi, seedTestUser } from "./helpers/testAuth";
+
+const TEST_USER = { username: "e2e-admin", password: "Test1234!", name: "Encargado E2E", role: "ADMIN" as const };
+
 const TEST_DATABASE_URL =
   process.env.PLAYWRIGHT_DATABASE_URL ??
   (process.env.DATABASE_URL
@@ -55,8 +59,9 @@ test.describe.serial("Producción piscícola offline (Fase 2)", () => {
       'TRUNCATE "sync_operations", "sale_lines", "sales", "harvests", "expenses", "purchase_lines", ' +
         '"purchases", "customers", "suppliers", "farm_settings", "tasks", "water_quality_records", ' +
         '"feeding_records", "mortality_records", "samplings", ' +
-        '"feed_inventory_movements", "feeds", "fish_transfers", "stockings", "fish_batches", "ponds", "species"',
+        '"feed_inventory_movements", "feeds", "fish_transfers", "stockings", "fish_batches", "ponds", "species", "users"',
     );
+    await seedTestUser(queryDb, TEST_USER);
 
     browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium" });
     context = await browser.newContext({ viewport: { width: 390, height: 844 } });
@@ -71,6 +76,7 @@ test.describe.serial("Producción piscícola offline (Fase 2)", () => {
   test("1. online: crear estanque E01 y sincronizar", async ({ baseURL }) => {
     await page.goto(`${baseURL}/`, { waitUntil: "networkidle" });
     await waitForServiceWorkerControl(page);
+    await loginViaUi(page, TEST_USER);
 
     // Visita cada ruta que se necesitará offline más adelante para que el
     // service worker la deje en su caché (mismo requisito que offline.spec.ts).
@@ -120,7 +126,16 @@ test.describe.serial("Producción piscícola offline (Fase 2)", () => {
     await expect(page).toHaveURL(/\/lotes\/[0-9a-f-]+$/);
     batchDetailUrl = page.url();
 
-    expect(await distributionSectionText(page)).toContain("1000 peces");
+    // La ficha del lote llega por navegación de cliente (router.push) justo
+    // tras la transacción Dexie que crea el lote + su siembra: el primer
+    // render puede ganarle a `useLiveQuery` resolviendo esa consulta async
+    // ("Este lote no tiene peces en ningún estanque" momentáneo) — se
+    // reintenta con el mismo criterio que el resto de lecturas de esta
+    // sección tras un cambio (líneas más abajo), en vez de una lectura
+    // única sin reintento.
+    await expect(async () => {
+      expect(await distributionSectionText(page)).toContain("1000 peces");
+    }).toPass({ timeout: 5_000 });
 
     // Traslado parcial: 400 de 1000 de E01 a E02 -> quedan 600/400.
     await page.getByRole("button", { name: "Trasladar peces" }).click();
