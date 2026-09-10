@@ -51,3 +51,7 @@ next-env.d.ts
 
 # cliente Prisma generado (Prisma 7, generador "prisma-client")
 /src/generated/prisma
+
+# volcados locales de scripts/backup.sh (nunca se versiona un backup con
+# datos reales — ver BACKUP_RESTORE.md)
+/backups/
