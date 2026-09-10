@@ -9,9 +9,11 @@ import type { UserRole } from "./permissions";
 export interface AdminUser {
   id: string;
   username: string;
+  email: string | null;
   name: string;
   role: UserRole;
   active: boolean;
+  mustChangePassword: boolean;
   createdAt: string;
   lastLoginAt: string | null;
 }
@@ -42,6 +44,7 @@ export async function listUsers(): Promise<AdminUser[]> {
 export interface CreateUserInput {
   username: string;
   name: string;
+  email?: string;
   password: string;
   role: UserRole;
 }
@@ -61,6 +64,7 @@ export async function createUser(input: CreateUserInput): Promise<AdminUser> {
 
 export interface UpdateUserInput {
   name?: string;
+  email?: string;
   role?: UserRole;
   active?: boolean;
   password?: string;

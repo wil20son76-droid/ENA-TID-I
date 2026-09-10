@@ -19,6 +19,13 @@ export interface ClientSession {
   username: string;
   name: string;
   role: UserRole;
+  /**
+   * true justo tras un login con una contraseña temporal asignada por
+   * ADMIN (§"Reset por ADMIN") — AuthGate bloquea el resto de la app con
+   * ForceChangePasswordScreen hasta que se cambie. `undefined`/`false` en
+   * cualquier sesión normal.
+   */
+  mustChangePassword?: boolean;
 }
 
 const SESSION_STORAGE_KEY = "piscicultura:session";

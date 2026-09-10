@@ -18,7 +18,8 @@
 import { useState, useSyncExternalStore } from "react";
 
 import { SessionProvider } from "@/lib/auth/SessionContext";
-import { getSession, setSession, type ClientSession } from "@/lib/auth/session";
+import { clearSession, getSession, setSession, type ClientSession } from "@/lib/auth/session";
+import { ForceChangePasswordScreen } from "./ForceChangePasswordScreen";
 import { LoginScreen } from "./LoginScreen";
 
 const subscribeNever = () => () => undefined;
@@ -53,6 +54,25 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         onSuccess={(next) => {
           setSession(next);
           setJustLoggedIn(next);
+        }}
+      />
+    );
+  }
+
+  // Contraseña temporal (§"Reset por ADMIN"): la sesión ya es válida (el
+  // login con red ya ocurrió), pero se bloquea el resto de la app hasta
+  // que se fije una contraseña propia — ver ForceChangePasswordScreen.tsx.
+  if (session.mustChangePassword) {
+    return (
+      <ForceChangePasswordScreen
+        session={session}
+        onChanged={(next) => {
+          setSession(next);
+          setJustLoggedIn(next);
+        }}
+        onLogout={() => {
+          clearSession();
+          window.location.reload();
         }}
       />
     );
