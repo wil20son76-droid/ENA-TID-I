@@ -5,7 +5,7 @@ import "./globals.css";
 import { AppShell } from "@/components/layout/AppShell";
 import { AuthGate } from "@/components/auth/AuthGate";
 import { InstallPrompt } from "@/components/pwa/InstallPrompt";
-import { ServiceWorkerRegister } from "@/components/pwa/ServiceWorkerRegister";
+import { ServiceWorkerRegister } from "@/components/pwa/ServiceWorkerRegisterLoader";
 import { SyncProvider } from "@/components/sync/SyncProvider";
 
 const geistSans = Geist({
