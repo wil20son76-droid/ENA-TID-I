@@ -23,6 +23,7 @@ describe("productionSummary", () => {
       stockings,
       transfers,
       mortalities,
+      [],
       samplings,
       BATCH,
       15,
@@ -31,6 +32,8 @@ describe("productionSummary", () => {
     expect(summary.totalQuantity).toBe(970);
     expect(summary.stockedTotal).toBe(1000);
     expect(summary.mortalityTotal).toBe(30);
+    expect(summary.harvestedFishTotal).toBe(0);
+    expect(summary.harvestedWeightKgTotal).toBe(0);
     expect(summary.survivalPercent).toBe(97);
     expect(summary.mortalityPercent).toBe(3);
 
@@ -50,11 +53,23 @@ describe("productionSummary", () => {
     const stockings = [{ batchId: BATCH, pondId: E01, quantity: 1000 }];
     const transfers: never[] = [];
     const mortalities = [{ batchId: BATCH, pondId: E01, quantity: 1000 }];
-    const summary = getBatchProductionSummary(stockings, transfers, mortalities, [], BATCH, 15);
+    const summary = getBatchProductionSummary(stockings, transfers, mortalities, [], [], BATCH, 15);
 
     expect(summary.totalQuantity).toBe(0);
     expect(summary.totalBiomassKg).toBe(0);
     expect(summary.averageWeightG).toBeNull();
     expect(summary.perPond).toHaveLength(0);
+  });
+
+  it("cosecha reduce totalQuantity/biomasa pero NUNCA la supervivencia (§19/§34/§41 de Fase 5)", () => {
+    const stockings = [{ batchId: BATCH, pondId: E01, quantity: 1000 }];
+    const harvests = [{ batchId: BATCH, pondId: E01, quantityFish: 400, totalWeightKg: 600 }];
+    const summary = getBatchProductionSummary(stockings, [], [], harvests, [], BATCH, 15);
+
+    expect(summary.totalQuantity).toBe(600);
+    expect(summary.harvestedFishTotal).toBe(400);
+    expect(summary.harvestedWeightKgTotal).toBe(600);
+    // Nada murió: la supervivencia debe seguir siendo 100%, nunca 60%.
+    expect(summary.survivalPercent).toBe(100);
   });
 });
