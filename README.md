@@ -7,29 +7,30 @@ completa y [`ARCHITECTURE.md`](./ARCHITECTURE.md) /
 [`OFFLINE_SYNC.md`](./OFFLINE_SYNC.md) para el detalle técnico del modo
 offline y la sincronización.
 
-Estado actual: **Fase 5 — economía y cierre productivo**. Sobre la
-base técnica offline/sync (Fase 1), el núcleo productivo (Fase 2:
-Especies, Estanques, Lotes, Siembras, Traslados), la operación diaria
-(Fase 3: alimento, alimentación, mortalidad, muestreos), el hardening
-de consistencia de sincronización (Fase 3.5) y calidad del agua/
-alertas/planificación (Fase 4), se añadió el resto del dominio
-productivo y económico: proveedores y clientes, compras (con costo de
-inventario de alimento por promedio ponderado histórico), gastos,
-cosechas (una salida más del ledger de peces, igual criterio que
-mortalidad/traslados), ventas (con balance de kg disponibles por
-cosecha) y la economía de cada lote (costo directo, costo/kg,
-ingresos, ganancia y margen) — todo offline-first, con dos comandos de
-negocio compuestos nuevos (`RegisterPurchase`, `RegisterSale`) que
-garantizan atomicidad real en el servidor. Ver
-[`ECONOMICS.md`](./ECONOMICS.md) para la política contable completa
-(qué es una compra vs un gasto, cómo se evita el doble conteo, el
-algoritmo de costo de alimento), y
+Estado actual: **Fase 6 — analítica e informes**. Sobre la base técnica
+offline/sync (Fase 1), el núcleo productivo (Fase 2: Especies,
+Estanques, Lotes, Siembras, Traslados), la operación diaria (Fase 3:
+alimento, alimentación, mortalidad, muestreos), el hardening de
+consistencia de sincronización (Fase 3.5), calidad del agua/alertas/
+planificación (Fase 4) y economía y cierre productivo (Fase 5:
+proveedores, clientes, compras, gastos, cosechas, ventas, economía de
+lote — ver [`ECONOMICS.md`](./ECONOMICS.md)), se añadió una capa de
+analítica e informes (`/informes/**`): dashboard avanzado, ocho
+informes especializados (producción, mortalidad, alimentación,
+inventario, calidad del agua, cosechas, ventas y economía),
+comparación por lote/especie, gráficos SVG propios (sin librería),
+exportación CSV y vista imprimible/PDF (`window.print()` nativo) — todo
+calculado en una capa `analytics` pura (nunca en componentes de React),
+100% funcional sin conexión y sin ninguna fuente de verdad nueva: cada
+KPI se deriva de los mismos ledgers de las fases 2-5, con razón de
+sumas (nunca promedio de promedios) en toda agregación entre lotes. Ver
 [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) junto con las
 secciones
 ["Modelo de producción piscícola" (Fase 2)](./OFFLINE_SYNC.md#8-modelo-de-producción-piscícola-fase-2),
 ["Operación diaria" (Fase 3)](./OFFLINE_SYNC.md#9-operación-diaria-alimento-mortalidad-y-muestreos-fase-3),
-["Calidad del agua, alertas y planificación" (Fase 4)](./OFFLINE_SYNC.md#11-calidad-del-agua-alertas-y-planificación-fase-4)
-y ["Economía y cierre productivo" (Fase 5)](./OFFLINE_SYNC.md#12-economía-y-cierre-productivo-fase-5)
+["Calidad del agua, alertas y planificación" (Fase 4)](./OFFLINE_SYNC.md#11-calidad-del-agua-alertas-y-planificación-fase-4),
+["Economía y cierre productivo" (Fase 5)](./OFFLINE_SYNC.md#12-economía-y-cierre-productivo-fase-5)
+y ["Analítica e informes" (Fase 6)](./OFFLINE_SYNC.md#13-analítica-e-informes-fase-6)
 de `OFFLINE_SYNC.md`.
 
 ## Stack
@@ -98,7 +99,7 @@ Abre <http://localhost:3000>.
 | `npm run typecheck` | Comprobación de tipos (`tsc --noEmit`) |
 | `npm run test` | Tests unitarios y de integración (Vitest) |
 | `npm run test:watch` | Vitest en modo watch |
-| `npm run test:e2e` | Tests E2E offline (Playwright; compila y levanta un build de producción automáticamente): escenario base (`tests/e2e/offline.spec.ts`), producción piscícola (`tests/e2e/production.spec.ts`), operación diaria (`tests/e2e/dailyOperations.spec.ts`), calidad del agua + tareas (`tests/e2e/waterQualityAndTasks.spec.ts`) y economía y cierre productivo (`tests/e2e/economics.spec.ts`) |
+| `npm run test:e2e` | Tests E2E offline (Playwright; compila y levanta un build de producción automáticamente): escenario base (`tests/e2e/offline.spec.ts`), producción piscícola (`tests/e2e/production.spec.ts`), operación diaria (`tests/e2e/dailyOperations.spec.ts`), calidad del agua + tareas (`tests/e2e/waterQualityAndTasks.spec.ts`), economía y cierre productivo (`tests/e2e/economics.spec.ts`) y analítica e informes (`tests/e2e/analytics.spec.ts`) |
 | `npm run db:migrate` | Aplica migraciones de Prisma (desarrollo) |
 | `npm run db:migrate:deploy` | Aplica migraciones ya creadas (producción/CI) |
 | `npm run db:generate` | Regenera el cliente de Prisma |
@@ -153,7 +154,12 @@ npm run test
 # Postgres que no hay duplicados) + economía y cierre productivo
 # (compra de alimento + cosecha parcial + cliente nuevo + venta contra
 # esa cosecha + gasto directo de lote, 100% offline, cerrar/reabrir sin
-# conexión, reconectar y comprobar en Postgres que no hay duplicados).
+# conexión, reconectar y comprobar en Postgres que no hay duplicados) +
+# analítica e informes (dos lotes con mortalidad y ventas reales,
+# supervivencia agregada 86,4% y precio medio 29 Bs/kg verificados en la
+# UI real, exportación CSV y botón de impresión sin conexión,
+# cerrar/reabrir sin red y reconectar/sincronizar dos veces sin que los
+# KPIs cambien ni se dupliquen).
 npm run test:e2e
 ```
 
@@ -208,7 +214,13 @@ src/
     cosechas/          Listado + registro de cosechas
     ventas/            Listado + registro de ventas (contra cosecha o externas)
     economia/          Resumen económico general de la finca
+    informes/          Dashboard avanzado + informes especializados
+                       (producción, mortalidad, alimentación,
+                       inventario, calidad del agua, cosechas, ventas,
+                       economía) y comparación por lote/especie
   components/         Componentes de UI (layout, sync, pwa, estanques)
+    charts/           Gráficos SVG propios (línea, barras) — sin librería
+    analytics/         Barra de filtros, botones de exportar CSV/imprimir, KpiCard
   hooks/              Hooks de React (estado de sincronización)
   lib/
     db/               Capa Dexie/IndexedDB (schema, repositorios)
@@ -220,6 +232,10 @@ src/
                        alimento, economía de lote, dinero) — sin
                        dependencias de Dexie ni de Prisma, usadas por
                        igual desde el cliente y el servidor
+    analytics/        Capa de informes (Fase 6): agregación ponderada,
+                       filtros, informes por dominio, comparación por
+                       lote/especie, exportación CSV — funciones puras,
+                       nunca dentro de un componente de React
     server/           Cliente Prisma (servidor)
     sync/             Motor de sincronización cliente + protocolo
     validation/       Esquemas Zod compartidos cliente/servidor
@@ -227,8 +243,8 @@ src/
   test/               Configuración de Vitest
 tests/e2e/            Tests Playwright: escenario offline base,
                        producción piscícola, operación diaria,
-                       calidad del agua + tareas, y economía y cierre
-                       productivo
+                       calidad del agua + tareas, economía y cierre
+                       productivo, y analítica e informes
 ```
 
 ## Documentación
@@ -237,3 +253,4 @@ tests/e2e/            Tests Playwright: escenario offline base,
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — cómo está construido lo que ya existe.
 - [`OFFLINE_SYNC.md`](./OFFLINE_SYNC.md) — offline y sincronización en detalle, con diagramas.
 - [`ECONOMICS.md`](./ECONOMICS.md) — política contable de la Fase 5: compra vs gasto, costo de inventario de alimento, economía de un lote, márgenes, limitaciones.
+- [`OFFLINE_SYNC.md` §13](./OFFLINE_SYNC.md#13-analítica-e-informes-fase-6) — capa de analítica de la Fase 6: por qué no hay fuentes de verdad nuevas, razón de sumas vs promedio de promedios (con los dos ejemplos obligatorios), filtros de período vs estado, y el escenario offline verificado.

@@ -725,17 +725,67 @@ para el detalle completo de cada punto.
    encajaba en los 4 niveles existentes — se añadió el nivel 5 en vez
    de forzarlo dentro del nivel 4 (ver `OFFLINE_SYNC.md` §12.3).
 
+## 4.6 Decisiones de arquitectura tomadas durante la Fase 6
+
+1. **`src/lib/analytics/` como capa nueva, paralela a `domain/`, nunca
+   dentro de ella**: los informes agregan/filtran/serializan datos ya
+   calculados por `domain/`, pero no son ellos mismos reglas de
+   dominio — mezclarlos habría hecho que `domain/` (usado también por
+   el servidor) cargara con conceptos puramente de presentación
+   (filtros, CSV, series mensuales).
+2. **Ninguna tabla Dexie/Prisma nueva para esta fase**: se consideró
+   persistir informes precalculados (para abrir `/informes` más rápido
+   con miles de registros) pero se descartó — habría sido una segunda
+   fuente de verdad que sincronizar y mantener consistente, exactamente
+   lo que la regla crítica del encargo prohíbe. Los informes siempre se
+   derivan en caliente de los ledgers ya sincronizados.
+3. **Gráficos SVG propios en vez de una librería**: mismo criterio que
+   la Fase 4 con calidad del agua (`OFFLINE_SYNC.md` §11) — una
+   dependencia de gráficos añade riesgo de compatibilidad con
+   React 19/Next 16/Turbopack y, si se sirviera desde un CDN, un punto
+   de fallo que rompería el modo offline. Dos componentes
+   (`LineChart`/`BarChart`, ~40 líneas cada uno) cubren toda la
+   necesidad de esta fase.
+4. **`window.print()` nativo en vez de una librería de PDF**: generar
+   PDF en el cliente (jsPDF, pdf-lib) añade peso al bundle y su propio
+   riesgo de compatibilidad; el diálogo de impresión del sistema
+   operativo ya ofrece "Guardar como PDF" de forma nativa y funciona
+   igual sin conexión.
+5. **FCR agregado del informe de alimentación reutiliza los peces vivos
+   ya calculados por el informe de producción (`livingQuantityByBatch`),
+   en vez de recalcular el ledger de peces por segunda vez**: encontrado
+   al escribir `buildFeedingReport` — sumar directamente los gramos
+   ganados por pez (`calculateGrowth`, una cantidad intensiva) entre
+   lotes de poblaciones distintas habría sido otro caso del error que
+   la Fase 6 existe para evitar (promedio simple donde hace falta uno
+   ponderado); convertir esa ganancia a biomasa total por lote antes de
+   sumarla requiere saber cuántos peces tiene cada lote, y esa cuenta ya
+   la hace `buildProductionReport` — se pasa como parámetro explícito en
+   vez de crear una segunda fuente de verdad para el mismo dato.
+6. **Filtros de UI controlados en el estado de cada página, no en la
+   URL**: se evaluó `useSearchParams` + `Suspense` (como ya usan
+   `mortalidad/nueva` y `cosechas/nueva` para preseleccionar un
+   estanque) pero se descartó para los 9 informes porque la
+   persistencia de filtros en la URL no era un requisito explícito del
+   encargo, y habría añadido boilerplate de `Suspense` a cada página
+   sin beneficio claro.
+
 ## 5. Qué NO está implementado todavía
 
-Con la Fase 5 se cubre el resto del dominio productivo y económico
-básico. Deliberadamente fuera de alcance (§76 del encargo de Fase 5,
+Con la Fase 6 se cubre analítica e informes sobre el dominio productivo
+y económico ya existente. Deliberadamente fuera de alcance para la
+Fase 7 (según el encargo de esta fase): IA, sensores IoT,
+multiempresa/multi-finca, seguridad global (autenticación, roles de
+usuario), deployment final, backups, y hardening de producción.
+Deliberadamente fuera de alcance desde la Fase 5 (§76 de su encargo,
 ver `IMPLEMENTATION_PLAN.md` §9): contabilidad fiscal, facturación
 electrónica, impuestos, integración bancaria, nómina, tratamientos/
-medicamentos, diagnóstico de enfermedades, reproducción, sensores IoT,
-IA, múltiples fincas, un ERP completo, reportes PDF avanzados,
-autenticación, roles de usuario, gráficos avanzados, notificaciones
-push, eventos automáticos de producción creados desde el calendario, y
-el aviso interactivo "nueva versión disponible" del service worker
-(por ahora se actualiza solo, sin avisar). Ver también `ECONOMICS.md`
-§12 para las limitaciones específicas de la política contable
-(correcciones/anulaciones, `fryCost` vs compra explícita de alevines).
+medicamentos, diagnóstico de enfermedades, reproducción, un ERP
+completo, notificaciones push, eventos automáticos de producción
+creados desde el calendario, y el aviso interactivo "nueva versión
+disponible" del service worker (por ahora se actualiza solo, sin
+avisar). Ver también `ECONOMICS.md` §12 para las limitaciones
+específicas de la política contable (correcciones/anulaciones,
+`fryCost` vs compra explícita de alevines), y `OFFLINE_SYNC.md` §13.7
+para la limitación conocida de "Economía" (Fase 5) sin filtro de fecha
+propio en su página, a diferencia de los demás informes de la Fase 6.

@@ -994,3 +994,131 @@ alimento, cosecha parcial de 200 peces/300 kg, cliente nuevo, venta de
 todo encolado sin conexión, verificado que sigue visible tras
 cerrar/reabrir la app sin red, y confirmado en PostgreSQL sin
 duplicados tras sincronizar dos veces.
+
+## 13. Analítica e informes (Fase 6)
+
+### 13.1 Ninguna fuente de verdad nueva: informes sobre los mismos ledgers
+
+`src/lib/analytics/` (`reports.ts`, `comparison.ts`, `weightedStats.ts`,
+`filters.ts`, `csv.ts`) es una capa nueva pero **no** introduce ningún
+dato nuevo que sincronizar — no hay tabla Dexie ni Prisma nueva para
+esta fase. Cada función de `reports.ts` recibe arreglos ya cargados de
+Dexie (species, fishBatches, stockings, mortalityRecords, harvests,
+sales, saleLines, feedingRecords, waterQualityRecords...) y deriva
+filas/KPIs/series con las mismas funciones de dominio puras de las
+fases 2-5 (`batchLedger.ts`, `feedLedger.ts`, `feedCost.ts`,
+`batchEconomics.ts`, `sampling.ts`, `growth.ts`, `fcr.ts`,
+`waterQuality.ts`). Esto significa que los informes no tienen ningún
+protocolo de sync propio: funcionan, o no, exactamente con los mismos
+datos que ya sincronizaron (o no) las fases anteriores — nunca hay un
+estado "el informe sincronizó pero el dato no" ni viceversa.
+
+### 13.2 Cálculo estrictamente en capa `analytics`, nunca en componentes
+
+Regla crítica del encargo: ningún cálculo vive dentro de un componente
+de React. Cada página bajo `src/app/informes/**` sigue el mismo patrón
+de tres pasos: `useLiveQuery` (carga cruda de Dexie) → `useMemo` que
+llama a una función pura de `src/lib/analytics/reports.ts` o
+`comparison.ts` (nunca `useEffect` + `setState`) → JSX que solo
+renderiza los campos ya calculados. Esto es exactamente el mismo
+patrón `useLiveQuery` + repositorio puro usado en toda la app desde la
+Fase 1 — la única diferencia es que la "escritura" de un informe es una
+lectura derivada, no una mutación.
+
+### 13.3 Razón de sumas, nunca promedio de promedios
+
+El error más fácil de cometer al agregar KPIs de varios lotes es
+promediar porcentajes/precios ya calculados en vez de sumar numeradores
+y denominadores por separado y dividir una sola vez al final. Toda la
+capa `analytics` sigue la misma regla, centralizada una única vez en
+`weightedStats.ts` (`ratioOfSums`, `percentOfSums`,
+`aggregateSurvivalPercent`, `weightedAveragePrice`, `weightedAverage`)
+y reutilizada en cada agregación de `reports.ts`/`comparison.ts`:
+
+- **Supervivencia agregada** = Σ(sembrado − muerto) / Σsembrado × 100.
+  Ejemplo obligatorio del encargo: Lote A 1000 sembrados/900 vivos,
+  Lote B 100 sembrados/50 vivos → **86,36 %**, nunca el promedio simple
+  de 90 % y 50 % (que da 70 %, incorrecto porque ignora que el Lote A
+  pesa diez veces más que el Lote B).
+- **Precio medio ponderado** = Σ(kg×precio) / Σkg. Ejemplo obligatorio:
+  100 kg a 20 Bs/kg + 900 kg a 30 Bs/kg → **29 Bs/kg**, nunca el
+  promedio simple de 20 y 30 (25 Bs/kg).
+- **Costo/kg agregado** = Σcosto directo / Σkg cosechados.
+- **Margen agregado** = Σganancia / Σingresos × 100, nunca el promedio
+  de los márgenes % ya calculados por lote.
+- **Peso promedio de cosecha** ponderado por peces cosechados, no el
+  promedio simple de los `averageWeightG` de cada evento de cosecha.
+
+Ambos ejemplos obligatorios están verificados exactamente (no solo
+`toBeCloseTo` genérico) en `weightedStats.test.ts` y de nuevo de forma
+end-to-end en `tests/e2e/analytics.spec.ts`, registrando los mismos
+números desde la UI real.
+
+### 13.4 Filtros: qué corta una fecha y qué no
+
+Los filtros de especie/lote/estanque deciden qué **filas** entran a un
+informe (nunca qué eventos se suman dentro de una fila ya incluida). El
+filtro de fecha es distinto porque un informe mezcla dos tipos de
+métrica:
+
+- **Métricas de actividad de un período** (mortalidad, alimentación,
+  cosechas, ventas ocurridas EN el rango) sí se filtran por fecha —
+  `mortalityInPeriod`, `harvestedWeightKgInPeriod`, etc.
+- **Métricas de estado acumulado** (peces vivos ahora, supervivencia
+  histórica, biomasa actual) se calculan siempre desde el origen del
+  lote, sin importar el filtro de fecha — un balance de ledger no puede
+  "cortarse" a la mitad por un rango de fechas sin dejar de tener
+  sentido (¿cuántos peces "viven" solo en marzo?).
+
+Documentado una sola vez en el encabezado de `reports.ts` y verificado
+en `reports.test.ts` ("filtros: por rango de fecha limita la
+mortalidad/cosecha DEL PERÍODO, no el estado acumulado").
+
+### 13.5 Sin librería de gráficos ni de PDF
+
+Mismo criterio que la Fase 4 con calidad del agua (§11): cero
+dependencias nuevas. `src/components/charts/LineChart.tsx` y
+`BarChart.tsx` son SVG inline puro (sin Canvas, sin recharts/chart.js),
+así que renderizan igual con o sin red y no dependen de que un CDN
+externo esté disponible. La vista imprimible / "guardar como PDF" usa
+`window.print()` nativo (`PrintButton.tsx`) — el propio diálogo de
+impresión del sistema operativo ofrece "Guardar como PDF"; no hay
+ninguna librería de generación de PDF en el cliente. La exportación CSV
+(`src/lib/analytics/csv.ts`) genera el archivo en memoria (`Blob` +
+`URL.createObjectURL`) y dispara la descarga con un `<a>` temporal —
+cero llamadas de red, funciona exactamente igual offline que online.
+
+### 13.6 Escenario offline verificado
+
+`tests/e2e/analytics.spec.ts` siembra dos lotes (1000 y 100 peces),
+registra 100 y 50 muertes respectivamente y dos ventas (100 kg a 20
+Bs/kg y 900 kg a 30 Bs/kg) **completamente sin conexión**, y verifica
+contra la UI real de `/informes/**`:
+
+- La supervivencia agregada mostrada es 86,4 % (redondeo de pantalla de
+  86,36 %), nunca 70 %.
+- El precio medio/kg mostrado es 29,00 Bs, nunca 25,00 Bs.
+- El dashboard `/informes` muestra sus 8 KPIs sin ninguna petición de
+  red.
+- La exportación CSV (tanto por lote como el agregado por especie de
+  `/informes/comparacion`) funciona offline y contiene la razón de
+  sumas correcta, no el promedio.
+- El botón de impresión no rompe la página.
+- Cerrar y reabrir la pestaña sin conexión conserva exactamente los
+  mismos KPIs (se recalculan de Dexie local, nunca de una caché de
+  red).
+- Al reconectar y sincronizar — incluso dos veces seguidas — ni
+  Postgres duplica los registros ni los informes cambian de valor: se
+  siguen calculando de Dexie local, nunca de la API.
+
+### 13.7 Limitación conocida: `/informes/economia` sin filtro de fecha ni estanque
+
+`buildEconomicsReport` consume `BatchEconomics` (`batchEconomics.ts`,
+Fase 5), que ya es un resumen acumulado por lote sin desglose por
+evento individual ni por estanque — filtrar por fecha o estanque
+requeriría rehacer ese cálculo evento por evento, algo fuera de alcance
+de esta fase. El informe de economía solo admite filtro de lote/especie
+(`showPond={false}` en su `ReportFilterBar`, sin selector de fecha) y
+lo declara explícitamente en la propia página. El resto de los ocho
+informes sí admite los cuatro filtros (fecha, especie, lote y estanque)
+según corresponda a cada dominio.
