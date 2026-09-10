@@ -889,18 +889,54 @@ model SaleLine {
 model User {
   id           String   @id @default(uuid())
   username     String   @unique
+  /// Opcional a propósito: solo hace falta para recuperación de
+  /// contraseña por email (§"Recuperación por email"); un usuario sin
+  /// email sigue pudiendo iniciar sesión con usuario/contraseña con
+  /// normalidad, solo que ADMIN es la única vía de recuperación para él
+  /// (ver /usuarios, "Restablecer contraseña"). Se guarda en minúsculas
+  /// para que la búsqueda por email no dependa de mayúsculas/minúsculas.
+  email        String?  @unique
   name         String
   passwordHash String
   role         UserRole
   active       Boolean  @default(true)
   tokenVersion Int      @default(1)
+  /// true tras un restablecimiento hecho por ADMIN (§"Reset por ADMIN"):
+  /// el usuario puede iniciar sesión con la contraseña temporal, pero
+  /// AuthGate lo bloquea en una pantalla de cambio obligatorio antes de
+  /// dejarlo usar el resto de la app — ver ForceChangePasswordScreen.tsx.
+  mustChangePassword Boolean @default(false)
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   lastLoginAt DateTime?
 
+  passwordResetTokens PasswordResetToken[]
+
   @@index([active])
   @@map("users")
+}
+
+/// Token de recuperación de contraseña de un solo uso (§"Recuperación por
+/// email"). Solo se guarda el HASH del token (SHA-256) — igual que las
+/// contraseñas nunca se guardan en claro, el valor que viaja por email
+/// tampoco: si esta tabla se filtrara, nadie podría reconstruir un enlace
+/// de recuperación válido a partir de ella. `usedAt` lo invalida
+/// permanentemente tras el primer uso (nunca se reutiliza, ni siquiera
+/// dentro de su ventana de expiración).
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
 }
 
 /// Registro de operaciones de sincronización procesadas por el servidor.
