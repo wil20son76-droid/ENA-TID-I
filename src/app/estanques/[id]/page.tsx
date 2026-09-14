@@ -210,6 +210,12 @@ export default function PondDetailPage({ params }: PageProps<"/estanques/[id]">)
           Registrar muestreo
         </Link>
         <Link
+          href={`/racion-recomendada/${id}`}
+          className="rounded-lg border border-emerald-700 px-3 py-3 text-center text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950"
+        >
+          Ración recomendada
+        </Link>
+        <Link
           href={`/calidad-agua/nueva?pondId=${id}`}
           className="rounded-lg bg-emerald-700 px-3 py-3 text-center text-sm font-medium text-white transition-colors hover:bg-emerald-800"
         >

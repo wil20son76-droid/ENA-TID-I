@@ -19,6 +19,7 @@ import type {
   Expense,
   FarmSettings,
   Feed,
+  FeedingRecommendation,
   FeedingRecord,
   FeedInventoryMovement,
   FishBatch,
@@ -87,6 +88,8 @@ function serializePond(pond: Pond) {
     notes: pond.notes,
     status: pond.status,
     active: pond.active,
+    manualDailyRationKg: toNullableNumber(pond.manualDailyRationKg),
+    manualFeedingsPerDay: pond.manualFeedingsPerDay,
     createdAt: pond.createdAt.toISOString(),
     updatedAt: pond.updatedAt.toISOString(),
     deletedAt: pond.deletedAt ? pond.deletedAt.toISOString() : null,
@@ -181,6 +184,25 @@ function serializeFeed(feed: Feed) {
     deviceId: feed.deviceId,
     createdBy: feed.createdBy,
     updatedBy: feed.updatedBy,
+  };
+}
+
+function serializeFeedingRecommendation(rec: FeedingRecommendation) {
+  return {
+    id: rec.id,
+    speciesId: rec.speciesId,
+    minWeightG: toNullableNumber(rec.minWeightG) ?? 0,
+    maxWeightG: toNullableNumber(rec.maxWeightG) ?? 0,
+    feedPercent: toNullableNumber(rec.feedPercent) ?? 0,
+    feedingsPerDay: rec.feedingsPerDay,
+    active: rec.active,
+    createdAt: rec.createdAt.toISOString(),
+    updatedAt: rec.updatedAt.toISOString(),
+    deletedAt: rec.deletedAt ? rec.deletedAt.toISOString() : null,
+    version: rec.version,
+    deviceId: rec.deviceId,
+    createdBy: rec.createdBy,
+    updatedBy: rec.updatedBy,
   };
 }
 
@@ -530,6 +552,7 @@ export async function GET(request: Request) {
     harvests,
     sales,
     saleLines,
+    feedingRecommendations,
   ] = await Promise.all([
     prisma.species.findMany({ where: byUpdatedAt, orderBy: { updatedAt: "asc" } }),
     prisma.pond.findMany({ where: byUpdatedAt, orderBy: { updatedAt: "asc" } }),
@@ -559,6 +582,9 @@ export async function GET(request: Request) {
     prisma.harvest.findMany({ where: byCreatedAt, orderBy: { createdAt: "asc" } }),
     prisma.sale.findMany({ where: byUpdatedAt, orderBy: { updatedAt: "asc" } }),
     prisma.saleLine.findMany({ where: byCreatedAt, orderBy: { createdAt: "asc" } }),
+    // Función "Ración recomendada": mutable LWW, mismo criterio que
+    // Species/Pond/Feed — cursor por updatedAt.
+    prisma.feedingRecommendation.findMany({ where: byUpdatedAt, orderBy: { updatedAt: "asc" } }),
   ]);
 
   return NextResponse.json({
@@ -583,6 +609,7 @@ export async function GET(request: Request) {
     harvests: harvests.map(serializeHarvest),
     sales: sales.map(serializeSale),
     saleLines: saleLines.map(serializeSaleLine),
+    feedingRecommendations: feedingRecommendations.map(serializeFeedingRecommendation),
     serverTime: serverTime.toISOString(),
   });
 }

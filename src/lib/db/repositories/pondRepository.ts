@@ -56,6 +56,8 @@ export async function createPond(
     notes: null,
     status: "EMPTY",
     active: true,
+    manualDailyRationKg: null,
+    manualFeedingsPerDay: null,
     ...input,
     ...geometry,
   });

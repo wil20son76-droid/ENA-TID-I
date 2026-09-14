@@ -78,10 +78,12 @@ export function getConflictMessage(entityType: SyncEntityType, payload: unknown)
     case "Customer":
     case "Purchase":
     case "Sale":
-      // Task/FarmSettings/Supplier/Customer/Purchase/Sale son mutables,
-      // igual que Species/Pond — su conflicto SÍ es de versión (dos
-      // dispositivos editando/pagando el mismo registro offline), así que
-      // el mensaje genérico de LWW es correcto aquí.
+    case "FeedingRecommendation":
+      // Task/FarmSettings/Supplier/Customer/Purchase/Sale/
+      // FeedingRecommendation son mutables, igual que Species/Pond — su
+      // conflicto SÍ es de versión (dos dispositivos editando/pagando el
+      // mismo registro offline), así que el mensaje genérico de LWW es
+      // correcto aquí.
       return GENERIC_VERSION_CONFLICT;
     // Estas entidades nunca producen "conflict" en el servidor (son
     // append-only vía upsert, o su comando compuesto no valida balance),

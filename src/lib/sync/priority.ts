@@ -83,6 +83,9 @@ const SYNC_PRIORITY: Record<SyncEntityType, number> = {
   // motivo que "Purchase" arriba.
   RegisterSale: 5,
   Sale: 5,
+  // Función "Ración recomendada": depende solo de Species (nivel 1), igual
+  // criterio que FishBatch.
+  FeedingRecommendation: 2,
 };
 
 /** Prioridad de sincronización de un tipo de entidad — más bajo = antes. */
@@ -187,6 +190,10 @@ export function getDependencyEntityIds(entityType: SyncEntityType, payload: unkn
       // sean correctos, no solo que "no estén en error" en la cola local.
       const customerId = readField(payload, "customerId");
       return customerId ? [customerId] : [];
+    }
+    case "FeedingRecommendation": {
+      const speciesId = readField(payload, "speciesId");
+      return speciesId ? [speciesId] : [];
     }
   }
 }

@@ -14,6 +14,7 @@ import type {
   CustomerRecord,
   ExpenseRecord,
   FarmSettingsRecord,
+  FeedingRecommendationRecord,
   FeedingRecordRecord,
   FeedInventoryMovementRecord,
   FeedRecord,
@@ -107,6 +108,7 @@ export interface PullResponse {
   harvests: HarvestRecord[];
   sales: SaleRecord[];
   saleLines: SaleLineRecord[];
+  feedingRecommendations: FeedingRecommendationRecord[];
   serverTime: string;
 }
 

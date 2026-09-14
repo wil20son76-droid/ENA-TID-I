@@ -44,6 +44,10 @@ export const syncEntityTypeSchema = z.enum([
   // operaciones independientes, siempre como UN solo comando.
   "RegisterPurchase",
   "RegisterSale",
+  // Función "Ración recomendada": tabla configurable especie+peso →
+  // porcentaje/raciones (ver src/lib/domain/ration.ts). Mutable LWW,
+  // mismo criterio que Species/Pond/Feed.
+  "FeedingRecommendation",
 ]);
 export const pondStatusSchema = z.enum([
   "EMPTY",
@@ -169,6 +173,12 @@ export const pondPayloadSchema = z.object({
   notes: z.string().max(2000).nullable(),
   status: pondStatusSchema,
   active: z.boolean(),
+  // Función "Ración recomendada": ajuste manual de la ración diaria del
+  // estanque, SIEMPRE distinto del valor calculado (nunca toca inventario
+  // ni crea FeedingRecord). `null` = sin ajuste, se usa la recomendación
+  // calculada (ver src/lib/domain/pondRation.ts).
+  manualDailyRationKg: z.number().nonnegative().nullable(),
+  manualFeedingsPerDay: z.number().int().positive().nullable(),
   ...auditFieldsSchema,
 });
 
@@ -239,6 +249,22 @@ export const feedPayloadSchema = z.object({
   recommendedStage: z.string().max(200).nullable(),
   notes: z.string().max(2000).nullable(),
   minimumStockKg: z.number().nonnegative().nullable(),
+  active: z.boolean(),
+  ...auditFieldsSchema,
+});
+
+// Función "Ración recomendada": tabla configurable especie+peso →
+// porcentaje/raciones (src/lib/domain/ration.ts, findFeedingRecommendation).
+// Mutable LWW, mismo criterio que Species/Pond/Feed. El servidor no impone
+// que los rangos de una especie no se solapen — el cliente resuelve el
+// solape (gana el minWeightG más alto) al leer, no al escribir.
+export const feedingRecommendationPayloadSchema = z.object({
+  id: z.uuid(),
+  speciesId: z.uuid(),
+  minWeightG: z.number().nonnegative(),
+  maxWeightG: z.number().positive(),
+  feedPercent: z.number().positive().max(100),
+  feedingsPerDay: z.number().int().positive(),
   active: z.boolean(),
   ...auditFieldsSchema,
 });
@@ -595,6 +621,7 @@ export type ExpensePayload = z.infer<typeof expensePayloadSchema>;
 export type HarvestPayload = z.infer<typeof harvestPayloadSchema>;
 export type RegisterPurchasePayload = z.infer<typeof registerPurchasePayloadSchema>;
 export type RegisterSalePayload = z.infer<typeof registerSalePayloadSchema>;
+export type FeedingRecommendationPayload = z.infer<typeof feedingRecommendationPayloadSchema>;
 
 const basePushOperationSchema = z.object({
   // Id de la propia operación de sincronización — es la clave de
@@ -697,6 +724,10 @@ export const pushOperationSchema = z.discriminatedUnion("entityType", [
   basePushOperationSchema.extend({
     entityType: z.literal("RegisterSale"),
     payload: registerSalePayloadSchema,
+  }),
+  basePushOperationSchema.extend({
+    entityType: z.literal("FeedingRecommendation"),
+    payload: feedingRecommendationPayloadSchema,
   }),
 ]);
 

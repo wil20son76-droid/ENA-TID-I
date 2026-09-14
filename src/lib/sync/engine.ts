@@ -194,6 +194,7 @@ async function pullAndMerge(): Promise<void> {
       db.harvests,
       db.sales,
       db.saleLines,
+      db.feedingRecommendations,
     ],
     async () => {
       for (const species of response.species) {
@@ -258,6 +259,9 @@ async function pullAndMerge(): Promise<void> {
       }
       for (const line of response.saleLines) {
         await db.saleLines.put(line);
+      }
+      for (const recommendation of response.feedingRecommendations) {
+        await db.feedingRecommendations.put(recommendation);
       }
     },
   );

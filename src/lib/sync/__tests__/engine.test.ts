@@ -39,6 +39,7 @@ function emptyPullResponse() {
     harvests: [],
     sales: [],
     saleLines: [],
+    feedingRecommendations: [],
     serverTime: new Date().toISOString(),
   };
 }
@@ -324,6 +325,7 @@ describe("runSync", () => {
         harvests: [],
         sales: [],
         saleLines: [],
+        feedingRecommendations: [],
         serverTime: now,
       });
     });
@@ -428,6 +430,7 @@ describe("runSync", () => {
         harvests: [],
         sales: [],
         saleLines: [],
+        feedingRecommendations: [],
         serverTime: now,
       });
     });
@@ -563,6 +566,7 @@ describe("runSync", () => {
         harvests: [],
         sales: [],
         saleLines: [],
+        feedingRecommendations: [],
         serverTime: now,
       });
     });

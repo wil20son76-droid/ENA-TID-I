@@ -59,6 +59,7 @@ const ENTITY_CAPABILITY: Record<string, Capability> = {
   Supplier: "MANAGE_CATALOG",
   Customer: "MANAGE_CATALOG",
   FarmSettings: "MANAGE_CATALOG",
+  FeedingRecommendation: "MANAGE_CATALOG",
 
   // Economía (Fase 5): todo lo que mueve dinero o cierra producción.
   Purchase: "MANAGE_ECONOMY",

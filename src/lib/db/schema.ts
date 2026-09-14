@@ -12,6 +12,7 @@ import type {
   CustomerRecord,
   ExpenseRecord,
   FarmSettingsRecord,
+  FeedingRecommendationRecord,
   FeedingRecordRecord,
   FeedInventoryMovementRecord,
   FeedRecord,
@@ -56,6 +57,7 @@ export class AppDatabase extends Dexie {
   harvests!: EntityTable<HarvestRecord, "id">;
   sales!: EntityTable<SaleRecord, "id">;
   saleLines!: EntityTable<SaleLineRecord, "id">;
+  feedingRecommendations!: EntityTable<FeedingRecommendationRecord, "id">;
   syncQueue!: EntityTable<SyncQueueRecord, "id">;
   syncMeta!: EntityTable<SyncMetaRecord, "key">;
 
@@ -126,6 +128,15 @@ export class AppDatabase extends Dexie {
       harvests: "id, batchId, pondId, [batchId+pondId], date, createdAt",
       sales: "id, customerId, date, paymentStatus, updatedAt",
       saleLines: "id, saleId, batchId, harvestId, createdAt",
+    });
+
+    // Función "Ración recomendada": tabla configurable especie+peso →
+    // porcentaje/raciones. "ponds" gana manualDailyRationKg/
+    // manualFeedingsPerDay (Pond.ts), pero son campos técnicos no
+    // consultados por índice — igual criterio que v2/v3/v4/v5, no hace
+    // falta repetir su definición aquí (Dexie conserva la de v2).
+    this.version(6).stores({
+      feedingRecommendations: "id, speciesId, active, updatedAt",
     });
   }
 }

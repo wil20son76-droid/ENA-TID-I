@@ -96,6 +96,8 @@ async function setUpPond(deviceId: string) {
       areaSource: "CALCULATED",
       estimatedVolumeM3: null,
       volumeSource: "CALCULATED",
+      manualDailyRationKg: null,
+      manualFeedingsPerDay: null,
       capacityNotes: null,
       locationNotes: null,
       notes: null,

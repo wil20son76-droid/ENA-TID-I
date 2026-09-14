@@ -75,6 +75,9 @@ export interface PondFields {
   notes: string | null;
   status: PondStatus;
   active: boolean;
+  /** Ajuste manual de "Ración recomendada" (src/lib/domain/pondRation.ts) — `null` = sin ajuste, usa la recomendación calculada. */
+  manualDailyRationKg: number | null;
+  manualFeedingsPerDay: number | null;
 }
 
 export interface PondRecord extends PondFields, AuditFields {
@@ -196,6 +199,25 @@ export interface FeedFields {
 }
 
 export interface FeedRecord extends FeedFields, AuditFields {
+  id: string;
+}
+
+/**
+ * Fila configurable de la tabla especie+peso → porcentaje/raciones
+ * (función "Ración recomendada"). Mutable, igual criterio que Species —
+ * ver src/lib/domain/ration.ts (findFeedingRecommendation) para cómo se
+ * resuelve el bracket aplicable a un peso dado.
+ */
+export interface FeedingRecommendationFields {
+  speciesId: string;
+  minWeightG: number;
+  maxWeightG: number;
+  feedPercent: number;
+  feedingsPerDay: number;
+  active: boolean;
+}
+
+export interface FeedingRecommendationRecord extends FeedingRecommendationFields, AuditFields {
   id: string;
 }
 
@@ -524,6 +546,8 @@ export type SyncEntityType =
   | "FeedingRecord"
   | "MortalityRecord"
   | "Sampling"
+  // Función "Ración recomendada": tabla configurable especie+peso.
+  | "FeedingRecommendation"
   // Comandos de negocio compuestos (Fase 3.5) — ver src/lib/validation/sync.ts.
   | "RegisterFeeding"
   | "CreateFeedWithInitialStock"

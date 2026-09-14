@@ -16,6 +16,7 @@ const NAV_ITEMS = [
   { href: "/estanques", label: "Estanques", icon: "🌊" },
   { href: "/alimentacion", label: "Alimentación", icon: "🍽️" },
   { href: "/mortalidad", label: "Mortalidad", icon: "💀" },
+  { href: "/racion-recomendada", label: "Ración", icon: "🍚" },
   { href: "/calidad-agua", label: "Agua", icon: "💧" },
   { href: "/tareas", label: "Tareas", icon: "✅" },
   { href: "/economia", label: "Economía", icon: "💰" },

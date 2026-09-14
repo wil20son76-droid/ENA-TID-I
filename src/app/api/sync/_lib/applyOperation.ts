@@ -33,6 +33,7 @@ import type {
   CustomerPayload,
   ExpensePayload,
   FarmSettingsPayload,
+  FeedingRecommendationPayload,
   FeedingRecordPayload,
   FeedInventoryMovementPayload,
   FeedPayload,
@@ -103,6 +104,8 @@ function pondData(payload: PondPayload) {
     notes: payload.notes,
     status: payload.status,
     active: payload.active,
+    manualDailyRationKg: payload.manualDailyRationKg,
+    manualFeedingsPerDay: payload.manualFeedingsPerDay,
     createdAt: new Date(payload.createdAt),
     updatedAt: new Date(payload.updatedAt),
     deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
@@ -189,6 +192,25 @@ function feedData(payload: FeedPayload) {
     recommendedStage: payload.recommendedStage,
     notes: payload.notes,
     minimumStockKg: payload.minimumStockKg,
+    active: payload.active,
+    createdAt: new Date(payload.createdAt),
+    updatedAt: new Date(payload.updatedAt),
+    deletedAt: payload.deletedAt ? new Date(payload.deletedAt) : null,
+    version: payload.version,
+    deviceId: payload.deviceId,
+    createdBy: payload.createdBy,
+    updatedBy: payload.updatedBy,
+  };
+}
+
+function feedingRecommendationData(payload: FeedingRecommendationPayload) {
+  return {
+    id: payload.id,
+    speciesId: payload.speciesId,
+    minWeightG: payload.minWeightG,
+    maxWeightG: payload.maxWeightG,
+    feedPercent: payload.feedPercent,
+    feedingsPerDay: payload.feedingsPerDay,
     active: payload.active,
     createdAt: new Date(payload.createdAt),
     updatedAt: new Date(payload.updatedAt),
@@ -680,6 +702,36 @@ async function applyPondOperation(
   }
 
   await tx.pond.update({ where: { id: op.entityId }, data });
+  return "applied";
+}
+
+/**
+ * Recomendación de ración (función "Ración recomendada"): mutable LWW,
+ * mismo criterio que Species/Pond/Feed. Nunca valida balance ni stock —
+ * es solo configuración, no un evento de negocio.
+ */
+async function applyFeedingRecommendationOperation(
+  tx: TransactionClient,
+  op: Extract<PushOperation, { entityType: "FeedingRecommendation" }>,
+): Promise<ApplyResult> {
+  const data = feedingRecommendationData(op.payload);
+
+  if (op.operation === "CREATE") {
+    await tx.feedingRecommendation.create({ data });
+    return "applied";
+  }
+
+  const current = await tx.feedingRecommendation.findUnique({ where: { id: op.entityId } });
+  if (!current) {
+    await tx.feedingRecommendation.create({ data });
+    return "applied";
+  }
+
+  if (data.version <= current.version) {
+    return "conflict";
+  }
+
+  await tx.feedingRecommendation.update({ where: { id: op.entityId }, data });
   return "applied";
 }
 
@@ -1392,5 +1444,7 @@ export async function applyOperation(
       return applyRegisterPurchaseOperation(tx, op);
     case "RegisterSale":
       return applyRegisterSaleOperation(tx, op);
+    case "FeedingRecommendation":
+      return applyFeedingRecommendationOperation(tx, op);
   }
 }
