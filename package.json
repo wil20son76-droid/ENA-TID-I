@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "postbuild": "node scripts/generateSwPrecacheManifest.mjs",
     "start": "next start",
     "start:migrate": "prisma migrate deploy && next start",
     "lint": "eslint .",

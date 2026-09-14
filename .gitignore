@@ -17,6 +17,11 @@
 /.next/
 /out/
 
+# generado por scripts/generateSwPrecacheManifest.mjs después de cada
+# build (postbuild) — varía con cada build (nombres de chunk con hash),
+# nunca es un artefacto de fuente.
+/public/sw-precache-manifest.json
+
 # production
 /build
 
